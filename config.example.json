@@ -1,0 +1,11 @@
+{
+    "Urls": ["https://example.com", "https://httpbin.org/get"],
+    "UrlMode": "Sequential",
+    "VirtualUsers": 5,
+    "RequestCount": 10,
+    "DelayMs": 100,
+    "Headers": {
+        "User-Agent": "LoadTest/1.0",
+        "Accept": "application/json"
+    }
+}
