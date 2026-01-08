@@ -67,6 +67,56 @@ public class ResultService
             AnsiConsole.WriteLine();
         }
 
+        // Статистика по каждой ссылке (если ссылок несколько)
+        var uniqueUrls = results.Select(r => r.Url).Distinct().ToList();
+        if (uniqueUrls.Count > 1)
+        {
+            AnsiConsole.MarkupLine("[bold]Статистика по ссылкам:[/]");
+            AnsiConsole.WriteLine();
+
+            var urlStatsTable = new Table();
+            urlStatsTable.AddColumn("URL");
+            urlStatsTable.AddColumn("Всего запросов");
+            urlStatsTable.AddColumn("Успешных");
+            urlStatsTable.AddColumn("Неуспешных");
+            urlStatsTable.AddColumn("Среднее время (мс)");
+            urlStatsTable.AddColumn("95 процентиль (мс)");
+            urlStatsTable.AddColumn("Мин/Макс (мс)");
+
+            foreach (var url in uniqueUrls)
+            {
+                var urlResults = results.Where(r => r.Url == url).ToList();
+                var urlSuccessCount = urlResults.Count(r => r.IsSuccess);
+                var urlFailureCount = urlResults.Count - urlSuccessCount;
+                var urlAvgTime = urlResults.Average(r => r.ResponseTimeMs);
+                
+                var urlSortedTimes = urlResults.Select(r => r.ResponseTimeMs).OrderBy(t => t).ToList();
+                var urlPercentile95Index = (int)(urlSortedTimes.Count * 0.95);
+                var urlPercentile95 = urlPercentile95Index < urlSortedTimes.Count 
+                    ? urlSortedTimes[urlPercentile95Index] 
+                    : urlSortedTimes.LastOrDefault();
+                
+                var urlMinTime = urlSortedTimes.FirstOrDefault();
+                var urlMaxTime = urlSortedTimes.LastOrDefault();
+
+                // Обрезаем длинный URL для отображения
+                var displayUrl = url.Length > 50 ? url.Substring(0, 47) + "..." : url;
+
+                urlStatsTable.AddRow(
+                    displayUrl,
+                    urlResults.Count.ToString(),
+                    $"[green]{urlSuccessCount}[/]",
+                    urlFailureCount > 0 ? $"[red]{urlFailureCount}[/]" : "0",
+                    $"{urlAvgTime:F2}",
+                    urlPercentile95.ToString(),
+                    $"{urlMinTime}/{urlMaxTime}"
+                );
+            }
+
+            AnsiConsole.Write(urlStatsTable);
+            AnsiConsole.WriteLine();
+        }
+
         // Ссылки с ошибками
         var errorUrls = results
             .Where(r => !r.IsSuccess)

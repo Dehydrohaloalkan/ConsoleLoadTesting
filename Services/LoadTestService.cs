@@ -16,6 +16,7 @@ public class LoadTestService
     public async Task<List<TestResult>> RunLoadTestAsync(
         TestConfig config,
         IProgress<double>? progress = null,
+        Action<TestResult>? onResultReceived = null,
         CancellationToken cancellationToken = default)
     {
         var results = new List<TestResult>();
@@ -48,6 +49,9 @@ public class LoadTestService
 
                     var result = await ExecuteRequestAsync(userId, url, config.Headers);
                     userResults.Add(result);
+
+                    // Уведомляем о новом результате
+                    onResultReceived?.Invoke(result);
 
                     var completed = Interlocked.Increment(ref completedRequests);
                     progress?.Report((double)completed / totalRequests);
