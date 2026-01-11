@@ -8,6 +8,7 @@ public class TestConfig
     public int RequestCount { get; set; } = 1;
     public int DelayMs { get; set; } = 0;
     public Dictionary<string, string> Headers { get; set; } = new();
+    public int ChartTimeStepSeconds { get; set; } = 1;
 }
 
 public enum UrlMode

@@ -1,9 +1,10 @@
 {
     "Urls": ["https://example.com", "https://httpbin.org/get"],
     "UrlMode": "Sequential",
-    "VirtualUsers": 40,
+    "VirtualUsers": 80,
     "RequestCount": 100,
-    "DelayMs": 100,
+    "DelayMs": 0,
+    "ChartTimeStepSeconds": 1,
     "Headers": {
         "User-Agent": "LoadTest/1.0",
         "Accept": "application/json"

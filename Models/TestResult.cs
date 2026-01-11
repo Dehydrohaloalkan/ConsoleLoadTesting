@@ -8,4 +8,5 @@ public class TestResult
     public long ResponseTimeMs { get; set; }
     public bool IsSuccess { get; set; }
     public string? ErrorMessage { get; set; }
+    public DateTime Timestamp { get; set; }
 }

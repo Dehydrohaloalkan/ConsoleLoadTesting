@@ -56,6 +56,14 @@ var saveOption = new Option<string?>(
     description: "Путь для сохранения результатов в CSV файл"
 );
 
+var loadOption = new Option<string[]>(
+    aliases: new[] { "--load", "-l" },
+    description: "Пути к файлам результатов для анализа (можно указать несколько)"
+)
+{
+    AllowMultipleArgumentsPerToken = true
+};
+
 rootCommand.AddOption(urlsOption);
 rootCommand.AddOption(urlModeOption);
 rootCommand.AddOption(usersOption);
@@ -64,6 +72,7 @@ rootCommand.AddOption(delayOption);
 rootCommand.AddOption(headersOption);
 rootCommand.AddOption(configOption);
 rootCommand.AddOption(saveOption);
+rootCommand.AddOption(loadOption);
 
 rootCommand.SetHandler(async (context) =>
 {
@@ -75,11 +84,40 @@ rootCommand.SetHandler(async (context) =>
     var headers = context.ParseResult.GetValueForOption(headersOption) ?? Array.Empty<string>();
     var configPath = context.ParseResult.GetValueForOption(configOption);
     var savePath = context.ParseResult.GetValueForOption(saveOption);
+    var loadPaths = context.ParseResult.GetValueForOption(loadOption) ?? Array.Empty<string>();
+
+    var resultService = new ResultService();
+
+    // Режим загрузки и анализа файлов
+    if (loadPaths.Length > 0)
+    {
+        var testResultsDict = new Dictionary<string, List<TestResult>>();
+        
+        foreach (var loadPath in loadPaths)
+        {
+            var loadedResults = resultService.LoadResultsFromFile(loadPath);
+            if (loadedResults != null && loadedResults.Any())
+            {
+                testResultsDict[loadPath] = loadedResults;
+            }
+        }
+
+        if (testResultsDict.Count > 0)
+        {
+            resultService.DisplaySummaryReport(testResultsDict, 1); // Используем шаг по умолчанию
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Не удалось загрузить ни одного файла[/]");
+            context.ExitCode = 1;
+        }
+        return;
+    }
 
     var configService = new ConfigService();
     var interactiveService = new InteractiveService();
     var loadTestService = new LoadTestService();
-    var resultService = new ResultService();
+    var resultServiceForTest = new ResultService();
 
     TestConfig? config = null;
 
@@ -109,14 +147,7 @@ rootCommand.SetHandler(async (context) =>
         };
 
         // Парсинг заголовков
-        foreach (var header in headers)
-        {
-            var parts = header.Split(':', 2);
-            if (parts.Length == 2)
-            {
-                config.Headers[parts[0].Trim()] = parts[1].Trim();
-            }
-        }
+        ParseHeaders(headers, config.Headers);
     }
     // Режим 3: Интерактивный режим
     else
@@ -131,17 +162,8 @@ rootCommand.SetHandler(async (context) =>
         return;
     }
 
-    // Валидация конфигурации
-    if (config.VirtualUsers < 1)
+    if (!ValidateConfig(config))
     {
-        AnsiConsole.MarkupLine("[red]Ошибка: Количество виртуальных пользователей должно быть больше 0[/]");
-        context.ExitCode = 1;
-        return;
-    }
-
-    if (config.RequestCount < 1)
-    {
-        AnsiConsole.MarkupLine("[red]Ошибка: Количество запросов должно быть больше 0[/]");
         context.ExitCode = 1;
         return;
     }
@@ -154,61 +176,8 @@ rootCommand.SetHandler(async (context) =>
     var resultsLock = new object();
     var startTime = DateTime.UtcNow;
 
-    // Локальная функция для создания таблицы статистики по ссылкам
-    Table CreateUrlStatsTable(List<TestResult> resultsList, List<string> urlsList)
-    {
-        var table = new Table();
-        table.AddColumn("URL");
-        table.AddColumn("Запросов");
-        table.AddColumn("Успешных");
-        table.AddColumn("Неуспешных");
-        table.AddColumn("Среднее (мс)");
-        table.AddColumn("Мин/Макс (мс)");
-        table.AddColumn("RPS");
-        table.Border = TableBorder.Rounded;
-        
-        double totalRps = 0;
-        lock (resultsLock)
-        {
-            var elapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
-            totalRps = elapsedSeconds > 0 ? resultsList.Count / elapsedSeconds : 0;
-            
-            table.Title = new TableTitle($"[bold cyan]Статистика (в реальном времени) | Общий RPS: {totalRps:F2}[/]");
-
-            foreach (var url in urlsList)
-            {
-                var urlResults = resultsList.Where(r => r.Url == url).ToList();
-                var urlSuccessCount = urlResults.Count(r => r.IsSuccess);
-                var urlFailureCount = urlResults.Count - urlSuccessCount;
-                var urlAvgTime = urlResults.Any() ? urlResults.Average(r => r.ResponseTimeMs) : 0;
-                
-                var urlSortedTimes = urlResults.Select(r => r.ResponseTimeMs).OrderBy(t => t).ToList();
-                var urlMinTime = urlSortedTimes.Any() ? urlSortedTimes.First() : 0;
-                var urlMaxTime = urlSortedTimes.Any() ? urlSortedTimes.Last() : 0;
-                
-                // Вычисляем RPS для конкретного URL
-                var urlRps = elapsedSeconds > 0 ? urlResults.Count / elapsedSeconds : 0;
-
-                // Обрезаем длинный URL для отображения
-                var displayUrl = url.Length > 40 ? url.Substring(0, 37) + "..." : url;
-
-                table.AddRow(
-                    displayUrl,
-                    urlResults.Count.ToString(),
-                    $"[green]{urlSuccessCount}[/]",
-                    urlFailureCount > 0 ? $"[red]{urlFailureCount}[/]" : "0",
-                    urlResults.Any() ? $"{urlAvgTime:F1}" : "-",
-                    urlResults.Any() ? $"{urlMinTime}/{urlMaxTime}" : "-/-",
-                    $"{urlRps:F2}"
-                );
-            }
-        }
-
-        return table;
-    }
-
     // Всегда показываем статистику в реальном времени
-    await AnsiConsole.Live(CreateUrlStatsTable(results, config.Urls))
+    await AnsiConsole.Live(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime))
         .StartAsync(async ctx =>
         {
             var onResultReceived = new Action<TestResult>(result =>
@@ -217,12 +186,11 @@ rootCommand.SetHandler(async (context) =>
                 {
                     results.Add(result);
                 }
-                // Обновляем таблицу при каждом новом результате
-                ctx.UpdateTarget(CreateUrlStatsTable(results, config.Urls));
+                ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime));
             });
 
             var returnedResults = await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
-            // Убеждаемся, что все результаты собраны
+            
             lock (resultsLock)
             {
                 if (returnedResults.Count > results.Count)
@@ -230,20 +198,19 @@ rootCommand.SetHandler(async (context) =>
                     results.Clear();
                     results.AddRange(returnedResults);
                 }
-                // Финальное обновление таблицы
-                ctx.UpdateTarget(CreateUrlStatsTable(results, config.Urls));
+                ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime));
             }
         });
 
     AnsiConsole.WriteLine();
 
     // Вывод результатов
-    resultService.DisplayResults(results);
+    resultServiceForTest.DisplayResults(results, config.ChartTimeStepSeconds);
 
     // Сохранение результатов
     if (!string.IsNullOrEmpty(savePath))
     {
-        resultService.SaveResultsToFile(results, savePath);
+        resultServiceForTest.SaveResultsToFile(results, savePath);
     }
 
     loadTestService.Dispose();
@@ -277,7 +244,38 @@ helpCommand.SetHandler(() =>
     AnsiConsole.MarkupLine("  --header, -H        Заголовки в формате 'Name:Value'");
     AnsiConsole.MarkupLine("  --config, -c        Путь к файлу конфигурации (JSON)");
     AnsiConsole.MarkupLine("  --save, -s          Путь для сохранения результатов (CSV)");
+    AnsiConsole.MarkupLine("  --load, -l          Пути к файлам результатов для анализа");
     AnsiConsole.MarkupLine("  help                Показать эту справку");
 });
+
+// Helper методы
+static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict)
+{
+    foreach (var header in headers)
+    {
+        var parts = header.Split(':', 2);
+        if (parts.Length == 2)
+        {
+            targetDict[parts[0].Trim()] = parts[1].Trim();
+        }
+    }
+}
+
+static bool ValidateConfig(TestConfig config)
+{
+    if (config.VirtualUsers < 1)
+    {
+        AnsiConsole.MarkupLine("[red]Ошибка: Количество виртуальных пользователей должно быть больше 0[/]");
+        return false;
+    }
+
+    if (config.RequestCount < 1)
+    {
+        AnsiConsole.MarkupLine("[red]Ошибка: Количество запросов должно быть больше 0[/]");
+        return false;
+    }
+
+    return true;
+}
 
 return await rootCommand.InvokeAsync(args);

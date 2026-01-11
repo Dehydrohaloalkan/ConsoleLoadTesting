@@ -37,24 +37,15 @@ public class LoadTestService
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    string url;
-                    if (config.UrlMode == UrlMode.Random)
-                    {
-                        url = config.Urls[random.Next(config.Urls.Count)];
-                    }
-                    else
-                    {
-                        url = config.Urls[i % config.Urls.Count];
-                    }
+                    var url = config.UrlMode == UrlMode.Random
+                        ? config.Urls[random.Next(config.Urls.Count)]
+                        : config.Urls[i % config.Urls.Count];
 
                     var result = await ExecuteRequestAsync(userId, url, config.Headers);
                     userResults.Add(result);
-
-                    // Уведомляем о новом результате
                     onResultReceived?.Invoke(result);
 
-                    var completed = Interlocked.Increment(ref completedRequests);
-                    progress?.Report((double)completed / totalRequests);
+                    progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
 
                     if (config.DelayMs > 0 && i < config.RequestCount - 1)
                     {
@@ -78,10 +69,12 @@ public class LoadTestService
     private async Task<TestResult> ExecuteRequestAsync(int userId, string url, Dictionary<string, string> headers)
     {
         var stopwatch = Stopwatch.StartNew();
+        var requestStartTime = DateTime.UtcNow;
         var result = new TestResult
         {
             UserId = userId,
-            Url = url
+            Url = url,
+            Timestamp = requestStartTime
         };
 
         try
