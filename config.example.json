@@ -1,8 +1,8 @@
 {
     "Urls": ["https://example.com", "https://httpbin.org/get"],
     "UrlMode": "Sequential",
-    "VirtualUsers": 5,
-    "RequestCount": 10,
+    "VirtualUsers": 40,
+    "RequestCount": 100,
     "DelayMs": 100,
     "Headers": {
         "User-Agent": "LoadTest/1.0",

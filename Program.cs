@@ -152,6 +152,7 @@ rootCommand.SetHandler(async (context) =>
 
     List<TestResult> results = new();
     var resultsLock = new object();
+    var startTime = DateTime.UtcNow;
 
     // Локальная функция для создания таблицы статистики по ссылкам
     Table CreateUrlStatsTable(List<TestResult> resultsList, List<string> urlsList)
@@ -163,11 +164,17 @@ rootCommand.SetHandler(async (context) =>
         table.AddColumn("Неуспешных");
         table.AddColumn("Среднее (мс)");
         table.AddColumn("Мин/Макс (мс)");
+        table.AddColumn("RPS");
         table.Border = TableBorder.Rounded;
-        table.Title = new TableTitle("[bold cyan]Статистика по ссылкам (в реальном времени)[/]");
-
+        
+        double totalRps = 0;
         lock (resultsLock)
         {
+            var elapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+            totalRps = elapsedSeconds > 0 ? resultsList.Count / elapsedSeconds : 0;
+            
+            table.Title = new TableTitle($"[bold cyan]Статистика (в реальном времени) | Общий RPS: {totalRps:F2}[/]");
+
             foreach (var url in urlsList)
             {
                 var urlResults = resultsList.Where(r => r.Url == url).ToList();
@@ -178,6 +185,9 @@ rootCommand.SetHandler(async (context) =>
                 var urlSortedTimes = urlResults.Select(r => r.ResponseTimeMs).OrderBy(t => t).ToList();
                 var urlMinTime = urlSortedTimes.Any() ? urlSortedTimes.First() : 0;
                 var urlMaxTime = urlSortedTimes.Any() ? urlSortedTimes.Last() : 0;
+                
+                // Вычисляем RPS для конкретного URL
+                var urlRps = elapsedSeconds > 0 ? urlResults.Count / elapsedSeconds : 0;
 
                 // Обрезаем длинный URL для отображения
                 var displayUrl = url.Length > 40 ? url.Substring(0, 37) + "..." : url;
@@ -188,7 +198,8 @@ rootCommand.SetHandler(async (context) =>
                     $"[green]{urlSuccessCount}[/]",
                     urlFailureCount > 0 ? $"[red]{urlFailureCount}[/]" : "0",
                     urlResults.Any() ? $"{urlAvgTime:F1}" : "-",
-                    urlResults.Any() ? $"{urlMinTime}/{urlMaxTime}" : "-/-"
+                    urlResults.Any() ? $"{urlMinTime}/{urlMaxTime}" : "-/-",
+                    $"{urlRps:F2}"
                 );
             }
         }
@@ -196,66 +207,33 @@ rootCommand.SetHandler(async (context) =>
         return table;
     }
 
-    // Если ссылок несколько, показываем статистику в реальном времени
-    if (config.Urls.Count > 1)
-    {
-        await AnsiConsole.Live(CreateUrlStatsTable(results, config.Urls))
-            .StartAsync(async ctx =>
+    // Всегда показываем статистику в реальном времени
+    await AnsiConsole.Live(CreateUrlStatsTable(results, config.Urls))
+        .StartAsync(async ctx =>
+        {
+            var onResultReceived = new Action<TestResult>(result =>
             {
-                var onResultReceived = new Action<TestResult>(result =>
-                {
-                    lock (resultsLock)
-                    {
-                        results.Add(result);
-                    }
-                    // Обновляем таблицу при каждом новом результате
-                    ctx.UpdateTarget(CreateUrlStatsTable(results, config.Urls));
-                });
-
-                var returnedResults = await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
-                // Убеждаемся, что все результаты собраны
                 lock (resultsLock)
                 {
-                    if (returnedResults.Count > results.Count)
-                    {
-                        results.Clear();
-                        results.AddRange(returnedResults);
-                    }
+                    results.Add(result);
                 }
+                // Обновляем таблицу при каждом новом результате
+                ctx.UpdateTarget(CreateUrlStatsTable(results, config.Urls));
             });
-    }
-    else
-    {
-        // Если ссылка одна, используем обычный прогресс-бар
-        await AnsiConsole.Progress()
-            .Columns(new ProgressColumn[]
-            {
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new SpinnerColumn()
-            })
-            .StartAsync(async ctx =>
-            {
-                var task = ctx.AddTask("[green]Выполнение запросов[/]", maxValue: config.VirtualUsers * config.RequestCount);
-                
-                var progress = new Progress<double>(p =>
-                {
-                    task.Value = (int)(p * task.MaxValue);
-                });
 
-                var onResultReceived = new Action<TestResult>(result =>
+            var returnedResults = await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
+            // Убеждаемся, что все результаты собраны
+            lock (resultsLock)
+            {
+                if (returnedResults.Count > results.Count)
                 {
-                    lock (resultsLock)
-                    {
-                        results.Add(result);
-                    }
-                });
-
-                results = await loadTestService.RunLoadTestAsync(config, progress, onResultReceived, CancellationToken.None);
-                task.Value = task.MaxValue;
-            });
-    }
+                    results.Clear();
+                    results.AddRange(returnedResults);
+                }
+                // Финальное обновление таблицы
+                ctx.UpdateTarget(CreateUrlStatsTable(results, config.Urls));
+            }
+        });
 
     AnsiConsole.WriteLine();
 
