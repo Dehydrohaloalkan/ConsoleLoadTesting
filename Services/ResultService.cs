@@ -42,6 +42,9 @@ public class ResultService
 
     private void DisplayTimeStatistics(List<TestResult> results)
     {
+        if (!results.Any())
+            return;
+
         var avgTime = results.Average(r => r.ResponseTimeMs);
         var percentile95 = CalculatePercentile(results.Select(r => r.ResponseTimeMs).ToList(), 0.95);
 
