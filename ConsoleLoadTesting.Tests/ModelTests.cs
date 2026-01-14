@@ -139,3 +139,91 @@ public class TestConfigTests
         Assert.Equal("Bearer token123", config.Headers["Authorization"]);
     }
 }
+
+public class ScenarioConfigTests
+{
+    [Fact]
+    public void ScenarioConfig_Parse_ShouldParseValidScenarioString()
+    {
+        // Act
+        var scenario = ScenarioConfig.Parse("2:30:5");
+
+        // Assert
+        Assert.Equal(2, scenario.VirtualUsers);
+        Assert.Equal(30, scenario.RequestCount);
+        Assert.Equal(5, scenario.DurationSeconds);
+    }
+
+    [Fact]
+    public void ScenarioConfig_Parse_ShouldThrowException_ForInvalidFormat()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:30"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:30:5:extra"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("invalid"));
+    }
+
+    [Fact]
+    public void ScenarioConfig_Parse_ShouldThrowException_ForInvalidNumbers()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("0:30:5"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:0:5"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:30:0"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("-1:30:5"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:-5:5"));
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.Parse("2:30:-1"));
+    }
+
+    [Fact]
+    public void ScenarioConfig_ParseScenarios_ShouldParseMultipleScenarios()
+    {
+        // Act
+        var scenarios = ScenarioConfig.ParseScenarios("1:20:3,2:30:5,3:40:7");
+
+        // Assert
+        Assert.Equal(3, scenarios.Count);
+        Assert.Equal(1, scenarios[0].VirtualUsers);
+        Assert.Equal(20, scenarios[0].RequestCount);
+        Assert.Equal(3, scenarios[0].DurationSeconds);
+        Assert.Equal(2, scenarios[1].VirtualUsers);
+        Assert.Equal(30, scenarios[1].RequestCount);
+        Assert.Equal(5, scenarios[1].DurationSeconds);
+        Assert.Equal(3, scenarios[2].VirtualUsers);
+        Assert.Equal(40, scenarios[2].RequestCount);
+        Assert.Equal(7, scenarios[2].DurationSeconds);
+    }
+
+    [Fact]
+    public void ScenarioConfig_ParseScenarios_ShouldHandleEmptyAndWhitespaceStrings()
+    {
+        // Act
+        var scenarios = ScenarioConfig.ParseScenarios("");
+        var scenarios2 = ScenarioConfig.ParseScenarios("   ");
+        var scenarios3 = ScenarioConfig.ParseScenarios(null);
+
+        // Assert
+        Assert.Empty(scenarios);
+        Assert.Empty(scenarios2);
+        Assert.Empty(scenarios3);
+    }
+
+    [Fact]
+    public void ScenarioConfig_ParseScenarios_ShouldHandleScenariosWithSpaces()
+    {
+        // Act
+        var scenarios = ScenarioConfig.ParseScenarios(" 1:20:3 , 2:30:5 ");
+
+        // Assert
+        Assert.Equal(2, scenarios.Count);
+        Assert.Equal(1, scenarios[0].VirtualUsers);
+        Assert.Equal(2, scenarios[1].VirtualUsers);
+    }
+
+    [Fact]
+    public void ScenarioConfig_ParseScenarios_ShouldThrowException_ForInvalidScenarioInList()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => ScenarioConfig.ParseScenarios("1:20:3,invalid:scenario"));
+    }
+}

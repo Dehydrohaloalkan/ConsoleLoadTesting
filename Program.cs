@@ -64,6 +64,11 @@ var loadOption = new Option<string[]>(
     AllowMultipleArgumentsPerToken = true
 };
 
+var scenariosOption = new Option<string>(
+    aliases: new[] { "--scenarios", "--scenario" },
+    description: "Сценарии тестирования в формате 'users:requests:duration,users:requests:duration' (например: '1:20:3,2:30:5')"
+);
+
 rootCommand.AddOption(urlsOption);
 rootCommand.AddOption(urlModeOption);
 rootCommand.AddOption(usersOption);
@@ -73,6 +78,7 @@ rootCommand.AddOption(headersOption);
 rootCommand.AddOption(configOption);
 rootCommand.AddOption(saveOption);
 rootCommand.AddOption(loadOption);
+rootCommand.AddOption(scenariosOption);
 
 rootCommand.SetHandler(async (context) =>
 {
@@ -85,6 +91,7 @@ rootCommand.SetHandler(async (context) =>
     var configPath = context.ParseResult.GetValueForOption(configOption);
     var savePath = context.ParseResult.GetValueForOption(saveOption);
     var loadPaths = context.ParseResult.GetValueForOption(loadOption) ?? Array.Empty<string>();
+    var scenariosString = context.ParseResult.GetValueForOption(scenariosOption);
 
     var resultService = new ResultService();
 
@@ -138,13 +145,29 @@ rootCommand.SetHandler(async (context) =>
         config = new TestConfig
         {
             Urls = urls.ToList(),
-            UrlMode = urlMode.Equals("random", StringComparison.OrdinalIgnoreCase) 
-                ? UrlMode.Random 
+            UrlMode = urlMode.Equals("random", StringComparison.OrdinalIgnoreCase)
+                ? UrlMode.Random
                 : UrlMode.Sequential,
             VirtualUsers = users,
             RequestCount = requests,
             DelayMs = delay
         };
+
+        // Парсинг сценариев
+        if (!string.IsNullOrEmpty(scenariosString))
+        {
+            try
+            {
+                config.Scenarios = ScenarioConfig.ParseScenarios(scenariosString);
+                config.UseScenarios = true;
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Ошибка парсинга сценариев: {ex.Message}[/]");
+                context.ExitCode = 1;
+                return;
+            }
+        }
 
         // Парсинг заголовков
         ParseHeaders(headers, config.Headers);
@@ -189,8 +212,10 @@ rootCommand.SetHandler(async (context) =>
                 ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime));
             });
 
-            var returnedResults = await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
-            
+            var returnedResults = config.UseScenarios
+                ? await loadTestService.RunScenariosLoadTestAsync(config, null, onResultReceived, CancellationToken.None)
+                : await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
+
             lock (resultsLock)
             {
                 if (returnedResults.Count > results.Count)
@@ -241,6 +266,7 @@ helpCommand.SetHandler(() =>
     AnsiConsole.MarkupLine("  --users, -v         Количество виртуальных пользователей");
     AnsiConsole.MarkupLine("  --requests, -r      Количество запросов на пользователя");
     AnsiConsole.MarkupLine("  --delay, -d         Задержка между запросами (мс)");
+    AnsiConsole.MarkupLine("  --scenarios         Сценарии в формате 'users:requests:duration,users:requests:duration'");
     AnsiConsole.MarkupLine("  --header, -H        Заголовки в формате 'Name:Value'");
     AnsiConsole.MarkupLine("  --config, -c        Путь к файлу конфигурации (JSON)");
     AnsiConsole.MarkupLine("  --save, -s          Путь для сохранения результатов (CSV)");
@@ -263,16 +289,48 @@ static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict
 
 static bool ValidateConfig(TestConfig config)
 {
-    if (config.VirtualUsers < 1)
+    if (config.UseScenarios)
     {
-        AnsiConsole.MarkupLine("[red]Ошибка: Количество виртуальных пользователей должно быть больше 0[/]");
-        return false;
-    }
+        if (config.Scenarios.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Ошибка: Не указаны сценарии для тестирования[/]");
+            return false;
+        }
 
-    if (config.RequestCount < 1)
+        foreach (var scenario in config.Scenarios)
+        {
+            if (scenario.VirtualUsers < 1)
+            {
+                AnsiConsole.MarkupLine($"[red]Ошибка: Количество виртуальных пользователей в сценарии должно быть больше 0[/]");
+                return false;
+            }
+
+            if (scenario.RequestCount < 1)
+            {
+                AnsiConsole.MarkupLine($"[red]Ошибка: Количество запросов в сценарии должно быть больше 0[/]");
+                return false;
+            }
+
+            if (scenario.DurationSeconds < 1)
+            {
+                AnsiConsole.MarkupLine($"[red]Ошибка: Длительность сценария должна быть больше 0 секунд[/]");
+                return false;
+            }
+        }
+    }
+    else
     {
-        AnsiConsole.MarkupLine("[red]Ошибка: Количество запросов должно быть больше 0[/]");
-        return false;
+        if (config.VirtualUsers < 1)
+        {
+            AnsiConsole.MarkupLine("[red]Ошибка: Количество виртуальных пользователей должно быть больше 0[/]");
+            return false;
+        }
+
+        if (config.RequestCount < 1)
+        {
+            AnsiConsole.MarkupLine("[red]Ошибка: Количество запросов должно быть больше 0[/]");
+            return false;
+        }
     }
 
     return true;
