@@ -7,11 +7,6 @@ internal static class TestResultCsv
 {
     public const string Header = "UserId,Url,StatusCode,TimeMs,Timestamp,IsSuccess,ErrorMessage";
 
-    public static void EnsureOutputDirectory(string filePath)
-    {
-        FileService.EnsureOutputDirectory(filePath);
-    }
-
     public static string Serialize(TestResult result)
     {
         var timestamp = result.Timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", CultureInfo.InvariantCulture);

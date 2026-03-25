@@ -3,162 +3,62 @@ using ConsoleLoadTesting.Models;
 
 namespace ConsoleLoadTesting.Services;
 
-public class ResultService
+public sealed class ResultService
 {
-    public void DisplayResults(List<TestResult> results, int chartTimeStepSeconds = 1)
-    {
-        var analysis = AnalyzeResults(results, chartTimeStepSeconds, includeCharts: true);
-        DisplayAnalyzedResults(analysis);
-    }
+    #region Constants
+    private const int DefaultTopErrorsCount = 10;
+    #endregion
+
+    #region Public API
 
     public void DisplayResultsFromFile(string filePath, int chartTimeStepSeconds = 1)
     {
         var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: true);
-        if (analysis is null || !analysis.HasResults)
+        if (!analysis.HasResults)
         {
-            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
+            DisplayNoDataMessage();
             return;
         }
 
         DisplayAnalyzedResults(analysis);
     }
 
-    public void SaveResultsToFile(IEnumerable<TestResult> results, string filePath)
-    {
-        TestResultCsv.EnsureOutputDirectory(filePath);
-
-        using var writer = FileService.CreateNewUtf8Writer(filePath);
-
-        writer.WriteLine(TestResultCsv.Header);
-
-        foreach (var result in results)
-        {
-            writer.WriteLine(TestResultCsv.Serialize(result));
-        }
-
-        writer.Flush();
-    }
-
-    public List<TestResult> LoadResultsFromFile(string filePath)
-    {
-        if (!File.Exists(filePath))
-        {
-            throw new FileNotFoundException($"File not found: {filePath}", filePath);
-        }
-
-        using var reader = FileService.CreateSequentialReader(filePath);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            throw new InvalidDataException($"Empty file: {filePath}");
-        }
-
-        var results = new List<TestResult>();
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            if (TestResultCsv.TryParse(line, out var result) && result is not null)
-            {
-                results.Add(result);
-            }
-        }
-
-        return results;
-    }
-
     public void DisplaySummaryReport(IEnumerable<string> filePaths, int chartTimeStepSeconds = 1)
     {
-        AnsiConsole.MarkupLine("[bold cyan]Summary report[/]");
-        AnsiConsole.WriteLine();
+        DisplaySummaryReportHeader();
 
         var summaries = new List<FileAnalysisSummary>();
-        var combined = new AnalyzedResults();
+        var combined = CreateAnalysis(chartTimeStepSeconds);
 
         foreach (var filePath in filePaths)
         {
             var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: false);
-            if (analysis is null || !analysis.HasResults)
-            {
-                continue;
-            }
-
-            summaries.Add(new FileAnalysisSummary(filePath, analysis));
-            combined.MergeFrom(analysis);
+            AddSummary(summaries, combined, filePath, analysis);
         }
 
-        if (summaries.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
-            return;
-        }
-
-        PopulateChartsForFiles(summaries.Select(summary => summary.FilePath), combined, chartTimeStepSeconds);
-        DisplayTestsSummaryTable(summaries);
-        DisplayOverallStatisticsTable(combined);
-        DisplaySummaryUrlStatisticsTable(combined);
-        DisplayErrorUrlsTable(combined);
-        DisplayTopErrorsTable(combined, topN: 10);
-
-        if (combined.HasResults)
-        {
-            DisplayTimeCharts(combined, chartTimeStepSeconds);
-        }
+        DisplayPreparedSummaryReport(
+            summaries,
+            combined,
+            () => PopulateChartsForFiles(summaries.Select(summary => summary.FilePath), combined, combined.ChartTimeStepSeconds));
     }
 
     public void DisplaySummaryReport(Dictionary<string, List<TestResult>> testResultsDict, int chartTimeStepSeconds = 1)
     {
-        AnsiConsole.MarkupLine("[bold cyan]Summary report[/]");
-        AnsiConsole.WriteLine();
-
-        if (testResultsDict.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
-            return;
-        }
+        DisplaySummaryReportHeader();
 
         var summaries = new List<FileAnalysisSummary>();
-        var combined = new AnalyzedResults();
+        var combined = CreateAnalysis(chartTimeStepSeconds);
 
         foreach (var entry in testResultsDict)
         {
             var analysis = AnalyzeResults(entry.Value, chartTimeStepSeconds, includeCharts: false);
-            if (!analysis.HasResults)
-            {
-                continue;
-            }
-
-            summaries.Add(new FileAnalysisSummary(entry.Key, analysis));
-            combined.MergeFrom(analysis);
+            AddSummary(summaries, combined, entry.Key, analysis);
         }
 
-        if (summaries.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
-            return;
-        }
-
-        PopulateChartsForResults(testResultsDict.Values.SelectMany(results => results), combined, chartTimeStepSeconds);
-        DisplayTestsSummaryTable(summaries);
-        DisplayOverallStatisticsTable(combined);
-        DisplaySummaryUrlStatisticsTable(combined);
-        DisplayErrorUrlsTable(combined);
-        DisplayTopErrorsTable(combined, topN: 10);
-
-        if (combined.HasResults)
-        {
-            DisplayTimeCharts(combined, chartTimeStepSeconds);
-        }
-    }
-
-    public Table CreateUrlStatsTable(List<TestResult> results, List<string> urls, DateTime startTime)
-    {
-        var realtimeStats = new RealtimeStats();
-        foreach (var result in results)
-        {
-            realtimeStats.Add(result);
-        }
-
-        return CreateUrlStatsTable(realtimeStats, urls, startTime);
+        DisplayPreparedSummaryReport(
+            summaries,
+            combined,
+            () => PopulateChartsForResults(testResultsDict.Values.SelectMany(results => results), combined, combined.ChartTimeStepSeconds));
     }
 
     public Table CreateUrlStatsTable(RealtimeStats stats, List<string> urls, DateTime startTime)
@@ -197,6 +97,64 @@ public class ResultService
         return table;
     }
 
+    #endregion
+
+    #region Summary report helpers
+
+    private static void DisplaySummaryReportHeader()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Summary report[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private static void DisplayNoDataMessage()
+    {
+        AnsiConsole.MarkupLine("[yellow]No data to display[/]");
+    }
+
+    private static void AddSummary(
+        List<FileAnalysisSummary> summaries,
+        AnalyzedResults combined,
+        string sourceName,
+        AnalyzedResults analysis)
+    {
+        if (!analysis.HasResults)
+        {
+            return;
+        }
+
+        summaries.Add(new FileAnalysisSummary(sourceName, analysis));
+        combined.MergeFrom(analysis);
+    }
+
+    private void DisplayPreparedSummaryReport(
+        List<FileAnalysisSummary> summaries,
+        AnalyzedResults combined,
+        Action populateCharts)
+    {
+        if (summaries.Count == 0)
+        {
+            DisplayNoDataMessage();
+            return;
+        }
+
+        populateCharts();
+        DisplayTestsSummaryTable(summaries);
+        DisplayOverallStatisticsTable(combined);
+        DisplaySummaryUrlStatisticsTable(combined);
+        DisplayErrorUrlsTable(combined);
+        DisplayTopErrorsTable(combined, DefaultTopErrorsCount);
+
+        if (combined.HasResults)
+        {
+            DisplayTimeCharts(combined, combined.ChartTimeStepSeconds);
+        }
+    }
+
+    #endregion
+
+    #region Display (tables/charts)
+
     private void DisplayAnalyzedResults(AnalyzedResults analysis)
     {
         AnsiConsole.WriteLine();
@@ -208,7 +166,7 @@ public class ResultService
         DisplayStatusCodesTable(analysis);
         DisplayUrlStatisticsTable(analysis);
         DisplayErrorUrlsTable(analysis);
-        DisplayTopErrorsTable(analysis, topN: 10);
+        DisplayTopErrorsTable(analysis, DefaultTopErrorsCount);
 
         if (analysis.HasResults)
         {
@@ -508,13 +466,14 @@ public class ResultService
         AnsiConsole.WriteLine();
     }
 
+    #endregion
+
+    #region Analysis & aggregation
+
     private AnalyzedResults AnalyzeResults(IEnumerable<TestResult> results, int chartTimeStepSeconds, bool includeCharts)
     {
         var materializedResults = results as IReadOnlyCollection<TestResult> ?? results.ToList();
-        var analysis = new AnalyzedResults
-        {
-            ChartTimeStepSeconds = NormalizeStep(chartTimeStepSeconds)
-        };
+        var analysis = CreateAnalysis(chartTimeStepSeconds);
 
         foreach (var result in materializedResults)
         {
@@ -529,32 +488,13 @@ public class ResultService
         return analysis;
     }
 
-    private AnalyzedResults? AnalyzeFile(string filePath, int chartTimeStepSeconds, bool includeCharts)
+    private AnalyzedResults AnalyzeFile(string filePath, int chartTimeStepSeconds, bool includeCharts)
     {
-        if (!File.Exists(filePath))
-        {
-            throw new FileNotFoundException($"File not found: {filePath}", filePath);
-        }
+        var analysis = CreateAnalysis(chartTimeStepSeconds);
 
-        using var reader = FileService.CreateSequentialReader(filePath);
-        var header = reader.ReadLine();
-        if (header is null)
+        foreach (var result in EnumerateResultsFromFile(filePath))
         {
-            throw new InvalidDataException($"Empty file: {filePath}");
-        }
-
-        var analysis = new AnalyzedResults
-        {
-            ChartTimeStepSeconds = NormalizeStep(chartTimeStepSeconds)
-        };
-
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            if (TestResultCsv.TryParse(line, out var result) && result is not null)
-            {
-                analysis.AddResult(result, CalculatePercentile);
-            }
+            analysis.AddResult(result, CalculatePercentile);
         }
 
         if (includeCharts && analysis.HasResults)
@@ -564,6 +504,10 @@ public class ResultService
 
         return analysis;
     }
+
+    #endregion
+
+    #region Time charts
 
     private void PopulateChartsForFiles(IEnumerable<string> filePaths, AnalyzedResults analysis, int stepSeconds)
     {
@@ -576,16 +520,9 @@ public class ResultService
 
         foreach (var filePath in filePaths)
         {
-            using var reader = FileService.CreateSequentialReader(filePath);
-            _ = reader.ReadLine();
-
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            foreach (var result in EnumerateResultsFromFile(filePath))
             {
-                if (TestResultCsv.TryParse(line, out var result) && result is not null)
-                {
-                    AddChartPoint(analysis, result, normalizedStep);
-                }
+                AddChartPoint(analysis, result, normalizedStep);
             }
         }
     }
@@ -621,13 +558,49 @@ public class ResultService
         }
     }
 
-    private int GetTimeInterval(DateTime timestamp, DateTime startTime, int stepSeconds)
+    #endregion
+
+    #region Internal helpers
+
+    private static AnalyzedResults CreateAnalysis(int chartTimeStepSeconds)
+    {
+        return new AnalyzedResults
+        {
+            ChartTimeStepSeconds = NormalizeStep(chartTimeStepSeconds)
+        };
+    }
+
+    private static IEnumerable<TestResult> EnumerateResultsFromFile(string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException($"File not found: {filePath}", filePath);
+        }
+
+        using var reader = FileService.CreateSequentialReader(filePath);
+        var header = reader.ReadLine();
+        if (header is null)
+        {
+            throw new InvalidDataException($"Empty file: {filePath}");
+        }
+
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (TestResultCsv.TryParse(line, out var result) && result is not null)
+            {
+                yield return result;
+            }
+        }
+    }
+
+    private static int GetTimeInterval(DateTime timestamp, DateTime startTime, int stepSeconds)
     {
         var seconds = (int)(timestamp - startTime).TotalSeconds;
         return Math.Max(0, seconds / stepSeconds);
     }
 
-    private string CreateBar(int value, int maxValue, int width, Color color)
+    private static string CreateBar(int value, int maxValue, int width, Color color)
     {
         if (maxValue == 0)
         {
@@ -639,7 +612,7 @@ public class ResultService
         return $"[{color}]{bar}[/]";
     }
 
-    private long CalculatePercentile(SortedDictionary<long, long> histogram, int totalCount, double percentile)
+    private static long CalculatePercentile(SortedDictionary<long, long> histogram, int totalCount, double percentile)
     {
         if (histogram.Count == 0 || totalCount <= 0)
         {
@@ -661,24 +634,24 @@ public class ResultService
         return histogram.Last().Key;
     }
 
-    private double CalculateRps(int requestCount, TimeSpan duration)
+    private static double CalculateRps(int requestCount, TimeSpan duration)
     {
         var totalSeconds = duration.TotalSeconds;
         return totalSeconds > 0 ? requestCount / totalSeconds : 0;
     }
 
-    private string GetStatusCodeColor(int statusCode)
+    private static string GetStatusCodeColor(int statusCode)
     {
         return statusCode >= 200 && statusCode < 300 ? "green" :
                statusCode >= 300 && statusCode < 400 ? "yellow" : "red";
     }
 
-    private string TruncateUrl(string url, int maxLength)
+    private static string TruncateUrl(string url, int maxLength)
     {
         return url.Length > maxLength ? url.Substring(0, maxLength - 3) + "..." : url;
     }
 
-    private string TruncateForTable(string value, int maxLength)
+    private static string TruncateForTable(string value, int maxLength)
     {
         if (string.IsNullOrEmpty(value))
         {
@@ -688,10 +661,14 @@ public class ResultService
         return value.Length > maxLength ? value.Substring(0, maxLength - 3) + "..." : value;
     }
 
-    private int NormalizeStep(int stepSeconds)
+    private static int NormalizeStep(int stepSeconds)
     {
         return stepSeconds > 0 ? stepSeconds : 1;
     }
+
+    #endregion
+
+    #region Nested types
 
     private sealed class FileAnalysisSummary
     {
@@ -910,4 +887,6 @@ public class ResultService
         public int Count { get; set; }
         public string LastError { get; set; } = string.Empty;
     }
+
+    #endregion
 }
