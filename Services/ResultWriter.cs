@@ -1,4 +1,3 @@
-using System.Text;
 using System.Threading.Channels;
 using ConsoleLoadTesting.Models;
 
@@ -14,17 +13,7 @@ public sealed class ResultWriter : IAsyncDisposable
     public ResultWriter(string filePath)
     {
         FilePath = filePath;
-        TestResultCsv.EnsureOutputDirectory(filePath);
-
-        var fileStream = new FileStream(
-            filePath,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.Read,
-            bufferSize: 65536,
-            useAsync: true);
-
-        _writer = new StreamWriter(fileStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), 65536);
+        _writer = FileService.CreateNewUtf8Writer(filePath);
         _channel = Channel.CreateUnbounded<TestResult[]>(new UnboundedChannelOptions
         {
             SingleReader = true,

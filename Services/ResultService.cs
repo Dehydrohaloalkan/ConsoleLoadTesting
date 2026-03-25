@@ -13,10 +13,10 @@ public class ResultService
 
     public void DisplayResultsFromFile(string filePath, int chartTimeStepSeconds = 1)
     {
-        var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: true, writeErrors: true);
+        var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: true);
         if (analysis is null || !analysis.HasResults)
         {
-            AnsiConsole.MarkupLine("[yellow]Нет данных для отображения[/]");
+            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
             return;
         }
 
@@ -27,8 +27,7 @@ public class ResultService
     {
         TestResultCsv.EnsureOutputDirectory(filePath);
 
-        using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 65536);
-        using var writer = new StreamWriter(fileStream);
+        using var writer = FileService.CreateNewUtf8Writer(filePath);
 
         writer.WriteLine(TestResultCsv.Header);
 
@@ -38,49 +37,38 @@ public class ResultService
         }
 
         writer.Flush();
-        AnsiConsole.MarkupLine($"[green]Результаты сохранены в: {filePath}[/]");
     }
 
-    public List<TestResult>? LoadResultsFromFile(string filePath)
+    public List<TestResult> LoadResultsFromFile(string filePath)
     {
         if (!File.Exists(filePath))
         {
-            AnsiConsole.MarkupLine($"[red]Файл не найден: {filePath}[/]");
-            return null;
+            throw new FileNotFoundException($"File not found: {filePath}", filePath);
         }
 
-        try
+        using var reader = FileService.CreateSequentialReader(filePath);
+        var header = reader.ReadLine();
+        if (header is null)
         {
-            using var reader = CreateReader(filePath);
-            var header = reader.ReadLine();
-            if (header is null)
-            {
-                AnsiConsole.MarkupLine($"[red]Пустой файл: {filePath}[/]");
-                return null;
-            }
-
-            var results = new List<TestResult>();
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
-            {
-                if (TestResultCsv.TryParse(line, out var result) && result is not null)
-                {
-                    results.Add(result);
-                }
-            }
-
-            return results;
+            throw new InvalidDataException($"Empty file: {filePath}");
         }
-        catch (Exception ex)
+
+        var results = new List<TestResult>();
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
         {
-            AnsiConsole.MarkupLine($"[red]Ошибка при загрузке файла {filePath}: {ex.Message}[/]");
-            return null;
+            if (TestResultCsv.TryParse(line, out var result) && result is not null)
+            {
+                results.Add(result);
+            }
         }
+
+        return results;
     }
 
     public void DisplaySummaryReport(IEnumerable<string> filePaths, int chartTimeStepSeconds = 1)
     {
-        AnsiConsole.MarkupLine("[bold cyan]Сводный отчет по результатам тестирования[/]");
+        AnsiConsole.MarkupLine("[bold cyan]Summary report[/]");
         AnsiConsole.WriteLine();
 
         var summaries = new List<FileAnalysisSummary>();
@@ -88,7 +76,7 @@ public class ResultService
 
         foreach (var filePath in filePaths)
         {
-            var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: false, writeErrors: true);
+            var analysis = AnalyzeFile(filePath, chartTimeStepSeconds, includeCharts: false);
             if (analysis is null || !analysis.HasResults)
             {
                 continue;
@@ -100,7 +88,7 @@ public class ResultService
 
         if (summaries.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]Нет данных для отображения[/]");
+            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
             return;
         }
 
@@ -119,12 +107,12 @@ public class ResultService
 
     public void DisplaySummaryReport(Dictionary<string, List<TestResult>> testResultsDict, int chartTimeStepSeconds = 1)
     {
-        AnsiConsole.MarkupLine("[bold cyan]Сводный отчет по результатам тестирования[/]");
+        AnsiConsole.MarkupLine("[bold cyan]Summary report[/]");
         AnsiConsole.WriteLine();
 
         if (testResultsDict.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]Нет данных для отображения[/]");
+            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
             return;
         }
 
@@ -145,7 +133,7 @@ public class ResultService
 
         if (summaries.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]Нет данных для отображения[/]");
+            AnsiConsole.MarkupLine("[yellow]No data to display[/]");
             return;
         }
 
@@ -177,18 +165,18 @@ public class ResultService
     {
         var table = new Table();
         table.AddColumn("URL");
-        table.AddColumn("Запросов");
-        table.AddColumn("Успешных");
-        table.AddColumn("Неуспешных");
-        table.AddColumn("Среднее (мс)");
-        table.AddColumn("Мин/Макс (мс)");
+        table.AddColumn("Requests");
+        table.AddColumn("Success");
+        table.AddColumn("Failures");
+        table.AddColumn("Avg (ms)");
+        table.AddColumn("Min/Max (ms)");
         table.AddColumn("RPS");
         table.Border = TableBorder.Rounded;
 
         var elapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
         var totalRps = elapsedSeconds > 0 ? stats.TotalRequests / elapsedSeconds : 0;
 
-        table.Title = new TableTitle($"[bold cyan]Статистика (в реальном времени) | Общий RPS: {totalRps:F2}[/]");
+        table.Title = new TableTitle($"[bold cyan]Realtime stats | Total RPS: {totalRps:F2}[/]");
 
         foreach (var url in urls)
         {
@@ -212,7 +200,7 @@ public class ResultService
     private void DisplayAnalyzedResults(AnalyzedResults analysis)
     {
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold]Результаты нагрузочного тестирования[/]");
+        AnsiConsole.MarkupLine("[bold]Load test results[/]");
         AnsiConsole.WriteLine();
 
         DisplaySuccessFailureChart(analysis);
@@ -233,9 +221,9 @@ public class ResultService
     {
         var chart = new BarChart()
             .Width(60)
-            .Label("[green]Успешные/Неуспешные запросы[/]")
-            .AddItem("Успешные", analysis.SuccessCount, Color.Green)
-            .AddItem("Неуспешные", analysis.FailureCount, Color.Red);
+            .Label("[green]Successful/Failed requests[/]")
+            .AddItem("Successful", analysis.SuccessCount, Color.Green)
+            .AddItem("Failed", analysis.FailureCount, Color.Red);
 
         AnsiConsole.Write(chart);
         AnsiConsole.WriteLine();
@@ -248,8 +236,8 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine($"[bold]Среднее время запроса:[/] {analysis.AverageResponseTime:F2} мс");
-        AnsiConsole.MarkupLine($"[bold]95 процентиль по времени:[/] {analysis.Percentile95} мс");
+        AnsiConsole.MarkupLine($"[bold]Average request time:[/] {analysis.AverageResponseTime:F2} ms");
+        AnsiConsole.MarkupLine($"[bold]95th percentile:[/] {analysis.Percentile95} ms");
         AnsiConsole.WriteLine();
     }
 
@@ -260,10 +248,10 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine("[bold]Статусы ответов:[/]");
+        AnsiConsole.MarkupLine("[bold]Response status codes:[/]");
         var statusTable = new Table();
-        statusTable.AddColumn("Статус");
-        statusTable.AddColumn("Количество");
+        statusTable.AddColumn("Status");
+        statusTable.AddColumn("Count");
 
         foreach (var pair in analysis.StatusCodeCounts.OrderBy(pair => pair.Key))
         {
@@ -282,17 +270,17 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine("[bold]Статистика по ссылкам:[/]");
+        AnsiConsole.MarkupLine("[bold]Per-URL statistics:[/]");
         AnsiConsole.WriteLine();
 
         var urlStatsTable = new Table();
         urlStatsTable.AddColumn("URL");
-        urlStatsTable.AddColumn("Всего запросов");
-        urlStatsTable.AddColumn("Успешных");
-        urlStatsTable.AddColumn("Неуспешных");
-        urlStatsTable.AddColumn("Среднее время (мс)");
-        urlStatsTable.AddColumn("95 процентиль (мс)");
-        urlStatsTable.AddColumn("Мин/Макс (мс)");
+        urlStatsTable.AddColumn("Total");
+        urlStatsTable.AddColumn("Success");
+        urlStatsTable.AddColumn("Failures");
+        urlStatsTable.AddColumn("Avg (ms)");
+        urlStatsTable.AddColumn("95p (ms)");
+        urlStatsTable.AddColumn("Min/Max (ms)");
 
         foreach (var pair in analysis.UrlStats.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
@@ -321,11 +309,11 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine("[bold red]Ссылки с ошибками:[/]");
+        AnsiConsole.MarkupLine("[bold red]URLs with errors:[/]");
         var errorTable = new Table();
         errorTable.AddColumn("URL");
-        errorTable.AddColumn("Количество ошибок");
-        errorTable.AddColumn("Последняя ошибка");
+        errorTable.AddColumn("Error count");
+        errorTable.AddColumn("Last error");
 
         foreach (var pair in analysis.ErrorUrls.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
@@ -358,11 +346,11 @@ public class ResultService
         }
 
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[bold red]Топ ошибок:[/]");
+        AnsiConsole.MarkupLine("[bold red]Top errors:[/]");
 
         var table = new Table();
-        table.AddColumn("Ошибка");
-        table.AddColumn("Количество");
+        table.AddColumn("Error");
+        table.AddColumn("Count");
         table.Border = TableBorder.Rounded;
 
         foreach (var item in items)
@@ -376,16 +364,16 @@ public class ResultService
     private void DisplayTestsSummaryTable(List<FileAnalysisSummary> summaries)
     {
         var summaryTable = new Table();
-        summaryTable.AddColumn("Файл");
-        summaryTable.AddColumn("Время теста");
-        summaryTable.AddColumn("Запросов");
-        summaryTable.AddColumn("Успешных");
-        summaryTable.AddColumn("Неуспешных");
-        summaryTable.AddColumn("Среднее (мс)");
-        summaryTable.AddColumn("95 процентиль");
+        summaryTable.AddColumn("File");
+        summaryTable.AddColumn("Duration");
+        summaryTable.AddColumn("Requests");
+        summaryTable.AddColumn("Success");
+        summaryTable.AddColumn("Failures");
+        summaryTable.AddColumn("Avg (ms)");
+        summaryTable.AddColumn("95p");
         summaryTable.AddColumn("RPS");
         summaryTable.Border = TableBorder.Rounded;
-        summaryTable.Title = new TableTitle("[bold]Сводная информация по тестам[/]");
+        summaryTable.Title = new TableTitle("[bold]Tests summary[/]");
 
         foreach (var summary in summaries)
         {
@@ -419,20 +407,20 @@ public class ResultService
         var duration = analysis.Duration;
         var rps = CalculateRps(analysis.TotalRequests, duration);
 
-        AnsiConsole.MarkupLine("[bold]Общая статистика по всем тестам:[/]");
+        AnsiConsole.MarkupLine("[bold]Overall statistics (all tests):[/]");
         AnsiConsole.WriteLine();
 
         var overallTable = new Table();
-        overallTable.AddColumn("Метрика");
-        overallTable.AddColumn("Значение");
+        overallTable.AddColumn("Metric");
+        overallTable.AddColumn("Value");
         overallTable.Border = TableBorder.Rounded;
 
-        overallTable.AddRow("Всего запросов", analysis.TotalRequests.ToString());
-        overallTable.AddRow("Успешных", $"[green]{analysis.SuccessCount}[/]");
-        overallTable.AddRow("Неуспешных", analysis.FailureCount > 0 ? $"[red]{analysis.FailureCount}[/]" : "0");
-        overallTable.AddRow("Среднее время (мс)", $"{analysis.AverageResponseTime:F2}");
-        overallTable.AddRow("95 процентиль (мс)", analysis.Percentile95.ToString());
-        overallTable.AddRow("Общий RPS", $"{rps:F2}");
+        overallTable.AddRow("Total requests", analysis.TotalRequests.ToString());
+        overallTable.AddRow("Successful", $"[green]{analysis.SuccessCount}[/]");
+        overallTable.AddRow("Failed", analysis.FailureCount > 0 ? $"[red]{analysis.FailureCount}[/]" : "0");
+        overallTable.AddRow("Average time (ms)", $"{analysis.AverageResponseTime:F2}");
+        overallTable.AddRow("95th percentile (ms)", analysis.Percentile95.ToString());
+        overallTable.AddRow("Total RPS", $"{rps:F2}");
 
         AnsiConsole.Write(overallTable);
         AnsiConsole.WriteLine();
@@ -445,16 +433,16 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine("[bold]Статистика по URL:[/]");
+        AnsiConsole.MarkupLine("[bold]Per-URL statistics:[/]");
         AnsiConsole.WriteLine();
 
         var urlTable = new Table();
         urlTable.AddColumn("URL");
-        urlTable.AddColumn("Всего запросов");
-        urlTable.AddColumn("Успешных");
-        urlTable.AddColumn("Неуспешных");
-        urlTable.AddColumn("Среднее время (мс)");
-        urlTable.AddColumn("95 процентиль (мс)");
+        urlTable.AddColumn("Total");
+        urlTable.AddColumn("Success");
+        urlTable.AddColumn("Failures");
+        urlTable.AddColumn("Avg (ms)");
+        urlTable.AddColumn("95p (ms)");
         urlTable.Border = TableBorder.Rounded;
 
         foreach (var pair in analysis.UrlStats.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -483,13 +471,13 @@ public class ResultService
             return;
         }
 
-        AnsiConsole.MarkupLine("[bold]Графики по времени:[/]");
+        AnsiConsole.MarkupLine("[bold]Charts over time:[/]");
         AnsiConsole.WriteLine();
 
         var chartTable = new Table();
-        chartTable.AddColumn("Время");
+        chartTable.AddColumn("Time");
         chartTable.AddColumn("RPS");
-        chartTable.AddColumn("Ошибки");
+        chartTable.AddColumn("Errors");
         chartTable.Border = TableBorder.Rounded;
         chartTable.ShowHeaders = true;
 
@@ -541,62 +529,40 @@ public class ResultService
         return analysis;
     }
 
-    private AnalyzedResults? AnalyzeFile(string filePath, int chartTimeStepSeconds, bool includeCharts, bool writeErrors)
+    private AnalyzedResults? AnalyzeFile(string filePath, int chartTimeStepSeconds, bool includeCharts)
     {
         if (!File.Exists(filePath))
         {
-            if (writeErrors)
-            {
-                AnsiConsole.MarkupLine($"[red]Файл не найден: {filePath}[/]");
-            }
-
-            return null;
+            throw new FileNotFoundException($"File not found: {filePath}", filePath);
         }
 
-        try
+        using var reader = FileService.CreateSequentialReader(filePath);
+        var header = reader.ReadLine();
+        if (header is null)
         {
-            using var reader = CreateReader(filePath);
-            var header = reader.ReadLine();
-            if (header is null)
-            {
-                if (writeErrors)
-                {
-                    AnsiConsole.MarkupLine($"[red]Пустой файл: {filePath}[/]");
-                }
-
-                return null;
-            }
-
-            var analysis = new AnalyzedResults
-            {
-                ChartTimeStepSeconds = NormalizeStep(chartTimeStepSeconds)
-            };
-
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
-            {
-                if (TestResultCsv.TryParse(line, out var result) && result is not null)
-                {
-                    analysis.AddResult(result, CalculatePercentile);
-                }
-            }
-
-            if (includeCharts && analysis.HasResults)
-            {
-                PopulateChartsForFiles(new[] { filePath }, analysis, analysis.ChartTimeStepSeconds);
-            }
-
-            return analysis;
+            throw new InvalidDataException($"Empty file: {filePath}");
         }
-        catch (Exception ex)
+
+        var analysis = new AnalyzedResults
         {
-            if (writeErrors)
-            {
-                AnsiConsole.MarkupLine($"[red]Ошибка при чтении файла {filePath}: {ex.Message}[/]");
-            }
+            ChartTimeStepSeconds = NormalizeStep(chartTimeStepSeconds)
+        };
 
-            return null;
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (TestResultCsv.TryParse(line, out var result) && result is not null)
+            {
+                analysis.AddResult(result, CalculatePercentile);
+            }
         }
+
+        if (includeCharts && analysis.HasResults)
+        {
+            PopulateChartsForFiles(new[] { filePath }, analysis, analysis.ChartTimeStepSeconds);
+        }
+
+        return analysis;
     }
 
     private void PopulateChartsForFiles(IEnumerable<string> filePaths, AnalyzedResults analysis, int stepSeconds)
@@ -610,7 +576,7 @@ public class ResultService
 
         foreach (var filePath in filePaths)
         {
-            using var reader = CreateReader(filePath);
+            using var reader = FileService.CreateSequentialReader(filePath);
             _ = reader.ReadLine();
 
             string? line;
@@ -653,12 +619,6 @@ public class ResultService
         {
             analysis.ErrorsByInterval[interval] = analysis.ErrorsByInterval.GetValueOrDefault(interval, 0) + 1;
         }
-    }
-
-    private static StreamReader CreateReader(string filePath)
-    {
-        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536, FileOptions.SequentialScan);
-        return new StreamReader(stream);
     }
 
     private int GetTimeInterval(DateTime timestamp, DateTime startTime, int stepSeconds)

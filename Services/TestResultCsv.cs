@@ -9,11 +9,7 @@ internal static class TestResultCsv
 
     public static void EnsureOutputDirectory(string filePath)
     {
-        var directory = Path.GetDirectoryName(filePath);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileService.EnsureOutputDirectory(filePath);
     }
 
     public static string Serialize(TestResult result)

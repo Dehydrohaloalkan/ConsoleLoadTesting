@@ -4,20 +4,6 @@
     "VirtualUsers": 80,
     "RequestCount": 100,
     "DelayMs": 0,
-    "Scenarios": [
-        {
-            "VirtualUsers": 1,
-            "RequestCount": 20,
-            "DurationSeconds": 3
-        },
-        {
-            "VirtualUsers": 2,
-            "RequestCount": 30,
-            "DurationSeconds": 5
-        }
-    ],
-    "UseScenarios": false,
-    "CalibrationRequests": 5,
     "ChartTimeStepSeconds": 1,
     "Headers": {
         "User-Agent": "LoadTest/1.0",

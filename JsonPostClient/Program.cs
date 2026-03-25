@@ -6,26 +6,26 @@ using JsonPostClient.Services;
 
 var urlOption = new Option<string?>(
     aliases: new[] { "--url", "-url" },
-    description: "URL эндпоинта для POST-запроса");
+    description: "Endpoint URL for the POST request");
 
 var jsonOption = new Option<string?>(
     aliases: new[] { "--json", "-json" },
-    description: "Путь к файлу с JSON-телом запроса");
+    description: "Path to file with JSON request body");
 
 var certOption = new Option<string?>(
     aliases: new[] { "--cert", "-cert" },
-    description: "Путь к клиентскому сертификату (.pfx) для проверки сервером");
+    description: "Path to client certificate (.pfx) for server verification");
 
 var certPasswordOption = new Option<string?>(
     aliases: new[] { "--cert-password", "-cert-password" },
-    description: "Пароль к .pfx (или переменная CERT_PASSWORD)");
+    description: "Password for .pfx (or CERT_PASSWORD env var)");
 
 var skipSslOption = new Option<bool>(
     aliases: new[] { "--skip-ssl", "-k" },
-    description: "Игнорировать ошибки проверки SSL сервера (только для тестов)",
+    description: "Ignore server SSL validation errors (testing only)",
     getDefaultValue: () => false);
 
-var rootCommand = new RootCommand("Отправка JSON POST-запроса на эндпоинт");
+var rootCommand = new RootCommand("Send a JSON POST request to an endpoint");
 rootCommand.AddOption(urlOption);
 rootCommand.AddOption(jsonOption);
 rootCommand.AddOption(certOption);
@@ -51,39 +51,39 @@ rootCommand.SetHandler(async (context) =>
     }
     else if (string.IsNullOrWhiteSpace(url) && string.IsNullOrWhiteSpace(jsonPath))
     {
-        endpointUrl = AnsiConsole.Ask<string>("URL эндпоинта:");
+        endpointUrl = AnsiConsole.Ask<string>("Endpoint URL:");
         if (string.IsNullOrWhiteSpace(endpointUrl))
         {
-            AnsiConsole.MarkupLine("[red]URL не указан.[/]");
+            AnsiConsole.MarkupLine("[red]URL is required.[/]");
             context.ExitCode = 1;
             return;
         }
-        jsonFilePath = AnsiConsole.Ask<string>("Путь к файлу с JSON:");
+        jsonFilePath = AnsiConsole.Ask<string>("Path to JSON file:");
         if (string.IsNullOrWhiteSpace(jsonFilePath))
         {
-            AnsiConsole.MarkupLine("[red]Путь к JSON не указан.[/]");
+            AnsiConsole.MarkupLine("[red]Path to JSON is required.[/]");
             context.ExitCode = 1;
             return;
         }
-        certPath = AnsiConsole.Ask<string>("Путь к клиентскому сертификату (.pfx):");
+        certPath = AnsiConsole.Ask<string>("Path to client certificate (.pfx):");
         if (string.IsNullOrWhiteSpace(certPath))
         {
-            AnsiConsole.MarkupLine("[red]Путь к сертификату не указан.[/]");
+            AnsiConsole.MarkupLine("[red]Path to certificate is required.[/]");
             context.ExitCode = 1;
             return;
         }
-        certPassword ??= AnsiConsole.Ask<string>("Пароль к сертификату (Enter если нет):");
+        certPassword ??= AnsiConsole.Ask<string>("Certificate password (press Enter if none):");
     }
     else
     {
-        AnsiConsole.MarkupLine("[red]Укажите оба параметра: -url и -json[/]");
+        AnsiConsole.MarkupLine("[red]Please provide both parameters: -url and -json[/]");
         context.ExitCode = 1;
         return;
     }
 
     if (!Uri.TryCreate(endpointUrl, UriKind.Absolute, out var uri) || uri.Scheme != "https" && uri.Scheme != "http")
     {
-        AnsiConsole.MarkupLine("[red]Некорректный URL.[/]");
+        AnsiConsole.MarkupLine("[red]Invalid URL.[/]");
         context.ExitCode = 1;
         return;
     }
@@ -91,7 +91,7 @@ rootCommand.SetHandler(async (context) =>
     var jsonContent = await File.ReadAllTextAsync(jsonFilePath).ConfigureAwait(false);
     if (string.IsNullOrWhiteSpace(jsonContent))
     {
-        AnsiConsole.MarkupLine("[red]Файл JSON пуст.[/]");
+        AnsiConsole.MarkupLine("[red]JSON file is empty.[/]");
         context.ExitCode = 1;
         return;
     }
@@ -105,7 +105,7 @@ rootCommand.SetHandler(async (context) =>
         var certPathResolved = Path.GetFullPath(certPath);
         if (!File.Exists(certPathResolved))
         {
-            AnsiConsole.MarkupLine($"[red]Файл сертификата не найден: {certPathResolved}[/]");
+            AnsiConsole.MarkupLine($"[red]Certificate file not found: {certPathResolved}[/]");
             context.ExitCode = 1;
             return;
         }
@@ -116,11 +116,11 @@ rootCommand.SetHandler(async (context) =>
     using var client = new HttpClient(handler);
     var result = await PostService.SendJsonAsync(client, endpointUrl, jsonContent).ConfigureAwait(false);
 
-    AnsiConsole.MarkupLine("[bold]Отчёт[/]");
-    AnsiConsole.MarkupLine($"  [cyan]Код ответа:[/] {result.StatusCode}");
-    AnsiConsole.MarkupLine($"  [cyan]Время отклика:[/] {result.ResponseTimeMs} мс");
+    AnsiConsole.MarkupLine("[bold]Report[/]");
+    AnsiConsole.MarkupLine($"  [cyan]Status code:[/] {result.StatusCode}");
+    AnsiConsole.MarkupLine($"  [cyan]Response time:[/] {result.ResponseTimeMs} ms");
     if (!string.IsNullOrEmpty(result.ErrorMessage))
-        AnsiConsole.MarkupLine($"[red]Ошибка: {result.ErrorMessage}[/]");
+        AnsiConsole.MarkupLine($"[red]Error: {result.ErrorMessage}[/]");
 
     context.ExitCode = result.StatusCode >= 200 && result.StatusCode < 300 ? 0 : 1;
 });

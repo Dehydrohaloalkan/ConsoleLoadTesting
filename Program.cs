@@ -1,340 +1,268 @@
 using System.CommandLine;
+using System.Globalization;
 using Spectre.Console;
 using ConsoleLoadTesting.Models;
 using ConsoleLoadTesting.Services;
 
-var rootCommand = new RootCommand("Приложение для нагрузочного тестирования сайтов");
-
-// Опции командной строки
-var urlsOption = new Option<string[]>(
-    aliases: new[] { "--urls", "-u" },
-    description: "URL-адреса для тестирования (можно указать несколько)"
-)
+public sealed class Program
 {
-    AllowMultipleArgumentsPerToken = true
-};
+    private static readonly RootCommand _rootCommand = new("Console application for website load testing");
 
-var urlModeOption = new Option<string>(
-    aliases: new[] { "--mode", "-m" },
-    description: "Режим работы с ссылками: sequential или random",
-    getDefaultValue: () => "sequential"
-);
-
-var usersOption = new Option<int>(
-    aliases: new[] { "--users", "-v" },
-    description: "Количество виртуальных пользователей",
-    getDefaultValue: () => 1
-);
-
-var requestsOption = new Option<int>(
-    aliases: new[] { "--requests", "-r" },
-    description: "Количество запросов на пользователя",
-    getDefaultValue: () => 1
-);
-
-var delayOption = new Option<int>(
-    aliases: new[] { "--delay", "-d" },
-    description: "Задержка между запросами в миллисекундах",
-    getDefaultValue: () => 0
-);
-
-var headersOption = new Option<string[]>(
-    aliases: new[] { "--header", "-H" },
-    description: "Заголовки запроса в формате 'Name:Value' (можно указать несколько)"
-)
-{
-    AllowMultipleArgumentsPerToken = true
-};
-
-var configOption = new Option<string?>(
-    aliases: new[] { "--config", "-c" },
-    description: "Путь к файлу конфигурации (JSON)"
-);
-
-var saveOption = new Option<string?>(
-    aliases: new[] { "--save", "-s" },
-    description: "Путь для сохранения результатов в CSV файл"
-);
-
-var loadOption = new Option<string[]>(
-    aliases: new[] { "--load", "-l" },
-    description: "Пути к файлам результатов для анализа (можно указать несколько)"
-)
-{
-    AllowMultipleArgumentsPerToken = true
-};
-
-var scenariosOption = new Option<string>(
-    aliases: new[] { "--scenarios", "--scenario" },
-    description: "Сценарии тестирования в формате 'users:requests:duration,users:requests:duration' (например: '1:20:3,2:30:5')"
-);
-
-rootCommand.AddOption(urlsOption);
-rootCommand.AddOption(urlModeOption);
-rootCommand.AddOption(usersOption);
-rootCommand.AddOption(requestsOption);
-rootCommand.AddOption(delayOption);
-rootCommand.AddOption(headersOption);
-rootCommand.AddOption(configOption);
-rootCommand.AddOption(saveOption);
-rootCommand.AddOption(loadOption);
-rootCommand.AddOption(scenariosOption);
-
-rootCommand.SetHandler(async (context) =>
-{
-    var urls = context.ParseResult.GetValueForOption(urlsOption) ?? Array.Empty<string>();
-    var urlMode = context.ParseResult.GetValueForOption(urlModeOption) ?? "sequential";
-    var users = context.ParseResult.GetValueForOption(usersOption);
-    var requests = context.ParseResult.GetValueForOption(requestsOption);
-    var delay = context.ParseResult.GetValueForOption(delayOption);
-    var headers = context.ParseResult.GetValueForOption(headersOption) ?? Array.Empty<string>();
-    var configPath = context.ParseResult.GetValueForOption(configOption);
-    var savePath = context.ParseResult.GetValueForOption(saveOption);
-    var loadPaths = context.ParseResult.GetValueForOption(loadOption) ?? Array.Empty<string>();
-    var scenariosString = context.ParseResult.GetValueForOption(scenariosOption);
-
-    var resultService = new ResultService();
-
-    // Режим загрузки и анализа файлов
-    if (loadPaths.Length > 0)
+    private static readonly Option<string[]> _urlsOption = new(
+        aliases: new[] { "--urls", "-u" },
+        description: "URLs to test (you can provide multiple)")
     {
-        resultService.DisplaySummaryReport(loadPaths, 1);
-        return;
+        AllowMultipleArgumentsPerToken = true
+    };
+
+    private static readonly Option<string> _urlModeOption = new(
+        aliases: new[] { "--mode", "-m" },
+        description: "URL selection mode: sequential or random",
+        getDefaultValue: () => "sequential");
+
+    private static readonly Option<int> _usersOption = new(
+        aliases: new[] { "--users", "-v" },
+        description: "Number of virtual users",
+        getDefaultValue: () => 1);
+
+    private static readonly Option<int> _requestsOption = new(
+        aliases: new[] { "--requests", "-r" },
+        description: "Requests per user",
+        getDefaultValue: () => 1);
+
+    private static readonly Option<int> _delayOption = new(
+        aliases: new[] { "--delay", "-d" },
+        description: "Delay between requests in milliseconds",
+        getDefaultValue: () => 0);
+
+    private static readonly Option<string[]> _headersOption = new(
+        aliases: new[] { "--header", "-H" },
+        description: "Request headers in 'Name:Value' format (you can provide multiple)")
+    {
+        AllowMultipleArgumentsPerToken = true
+    };
+
+    private static readonly Option<string?> _configOption = new(
+        aliases: new[] { "--config", "-c" },
+        description: "Path to config file (JSON)");
+
+    private static readonly Option<string?> _saveOption = new(
+        aliases: new[] { "--save", "-s" },
+        description: "Path to save results CSV file");
+
+    private static readonly Option<string[]> _loadOption = new(
+        aliases: new[] { "--load", "-l" },
+        description: "Paths to result files to analyze (you can provide multiple)")
+    {
+        AllowMultipleArgumentsPerToken = true
+    };
+
+    private static readonly Option<int> _chartTimeStepSeconds = new(
+        aliases: new[] { "--chart-step" },
+        description: "Chart time step in seconds",
+        getDefaultValue: () => 1);
+
+    public static async Task<int> Main(string[] args)
+    {
+        SetCulture();
+        ConfigureRootCommand();
+
+        try
+        {
+            if (args.Length == 0)
+            {
+                await _rootCommand.InvokeAsync(new[] { "--help" }).ConfigureAwait(false);
+                return 0;
+            }
+
+            await _rootCommand.InvokeAsync(args).ConfigureAwait(false);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            _ = await ErrorLogService.WriteAsync(ex).ConfigureAwait(false);
+            return 1;
+        }
     }
 
-    var configService = new ConfigService();
-    var interactiveService = new InteractiveService();
-    var loadTestService = new LoadTestService();
-    var resultServiceForTest = new ResultService();
-
-    TestConfig? config = null;
-
-    // Режим 1: Конфигурационный файл
-    if (!string.IsNullOrEmpty(configPath))
+    private static void ConfigureRootCommand()
     {
-        config = configService.LoadFromFile(configPath);
-        if (config == null)
+        _rootCommand.AddOption(_urlsOption);
+        _rootCommand.AddOption(_urlModeOption);
+        _rootCommand.AddOption(_usersOption);
+        _rootCommand.AddOption(_requestsOption);
+        _rootCommand.AddOption(_delayOption);
+        _rootCommand.AddOption(_headersOption);
+        _rootCommand.AddOption(_configOption);
+        _rootCommand.AddOption(_saveOption);
+        _rootCommand.AddOption(_loadOption);
+        _rootCommand.AddOption(_chartTimeStepSeconds);
+
+        _rootCommand.SetHandler(async (context) =>
         {
-            AnsiConsole.MarkupLine($"[red]Ошибка: Не удалось загрузить конфигурацию из файла {configPath}[/]");
-            context.ExitCode = 1;
+            var parseResult = context.ParseResult;
+            var commandContext = new CommandContext
+            {
+                Urls = parseResult.GetValueForOption(_urlsOption) ?? Array.Empty<string>(),
+                UrlMode = parseResult.GetValueForOption(_urlModeOption) ?? "sequential",
+                Users = parseResult.GetValueForOption(_usersOption),
+                Requests = parseResult.GetValueForOption(_requestsOption),
+                Delay = parseResult.GetValueForOption(_delayOption),
+                Headers = parseResult.GetValueForOption(_headersOption) ?? Array.Empty<string>(),
+                ConfigPath = parseResult.GetValueForOption(_configOption) ?? string.Empty,
+                SavePath = parseResult.GetValueForOption(_saveOption) ?? string.Empty,
+                LoadPaths = parseResult.GetValueForOption(_loadOption) ?? Array.Empty<string>(),
+                ChartTimeStepSeconds = parseResult.GetValueForOption(_chartTimeStepSeconds)
+            };
+
+            await Process(commandContext, context.GetCancellationToken()).ConfigureAwait(false);
+        });
+    }
+
+    private static async Task Process(CommandContext context, CancellationToken token)
+    {
+        var resultService = new ResultService();
+
+        if (context.LoadPaths.Length > 0)
+        {
+            resultService.DisplaySummaryReport(context.LoadPaths, context.ChartTimeStepSeconds);
             return;
         }
-    }
-    // Режим 2: Аргументы командной строки
-    else if (urls.Length > 0)
-    {
-        config = new TestConfig
+
+        var configService = new ConfigService();
+        var loadTestService = new LoadTestService();
+        var resultServiceForTest = new ResultService();
+
+        var config = BuildConfig(context, configService);
+
+        AnsiConsole.MarkupLine("[bold green]Starting load test...[/]");
+        AnsiConsole.WriteLine();
+
+        var outputPath = FileService.ResolveOutputPath(
+            string.IsNullOrWhiteSpace(context.SavePath) ? null : context.SavePath,
+            "ConsoleLoadTesting",
+            ".csv");
+
+        var realtimeStats = new RealtimeStats();
+        var statsLock = new object();
+        var startTime = DateTime.UtcNow;
+
+        AnsiConsole.MarkupLine($"[grey]Results file: {outputPath}[/]");
+
+        await using var resultWriter = new ResultWriter(outputPath);
+
+        try
         {
-            Urls = urls.ToList(),
-            UrlMode = urlMode.Equals("random", StringComparison.OrdinalIgnoreCase)
-                ? UrlMode.Random
-                : UrlMode.Sequential,
-            VirtualUsers = users,
-            RequestCount = requests,
-            DelayMs = delay
-        };
-
-        // Парсинг сценариев
-        if (!string.IsNullOrEmpty(scenariosString))
-        {
-            try
-            {
-                config.Scenarios = ScenarioConfig.ParseScenarios(scenariosString);
-                config.UseScenarios = true;
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]Ошибка парсинга сценариев: {ex.Message}[/]");
-                context.ExitCode = 1;
-                return;
-            }
-        }
-
-        // Парсинг заголовков
-        ParseHeaders(headers, config.Headers);
-    }
-    // Режим 3: Интерактивный режим
-    else
-    {
-        config = interactiveService.GetConfigInteractively();
-    }
-
-    if (config == null || config.Urls.Count == 0)
-    {
-        AnsiConsole.MarkupLine("[red]Ошибка: Не указаны URL-адреса для тестирования[/]");
-        context.ExitCode = 1;
-        return;
-    }
-
-    if (!ValidateConfig(config))
-    {
-        context.ExitCode = 1;
-        return;
-    }
-
-    // Запуск тестирования
-    AnsiConsole.MarkupLine("[bold green]Запуск нагрузочного тестирования...[/]");
-    AnsiConsole.WriteLine();
-
-    var outputPath = ResolveOutputPath(savePath);
-    var realtimeStats = new RealtimeStats();
-    var statsLock = new object();
-    var startTime = DateTime.UtcNow;
-
-    AnsiConsole.MarkupLine($"[grey]Файл результатов: {outputPath}[/]");
-
-    await using var resultWriter = new ResultWriter(outputPath);
-
-    try
-    {
-        await AnsiConsole.Live(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime))
-            .StartAsync(async ctx =>
-            {
-                var onResultReceived = new Action<TestResult>(result =>
+            await AnsiConsole.Live(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime))
+                .StartAsync(async liveCtx =>
                 {
-                    lock (statsLock)
+                    var onResultReceived = new Action<TestResult>(result =>
                     {
-                        realtimeStats.Add(result);
-                        ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime));
-                    }
-                });
+                        lock (statsLock)
+                        {
+                            realtimeStats.Add(result);
+                            liveCtx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime));
+                        }
+                    });
 
-                if (config.UseScenarios)
-                {
-                    await loadTestService.RunScenariosLoadTestAsync(
-                        config,
-                        null,
-                        onResultReceived,
-                        resultWriter,
-                        CancellationToken.None);
-                }
-                else
-                {
                     await loadTestService.RunLoadTestAsync(
                         config,
                         null,
                         onResultReceived,
                         resultWriter,
-                        CancellationToken.None);
-                }
-            });
-    }
-    finally
-    {
-        await resultWriter.CompleteAsync();
-        loadTestService.Dispose();
-    }
-
-    AnsiConsole.WriteLine();
-
-    // Вывод результатов
-    resultServiceForTest.DisplayResultsFromFile(outputPath, config.ChartTimeStepSeconds);
-});
-
-// Обработка команды help
-var helpCommand = new Command("help", "Показать справку");
-rootCommand.AddCommand(helpCommand);
-
-helpCommand.SetHandler(() =>
-{
-    AnsiConsole.MarkupLine("[bold cyan]Приложение для нагрузочного тестирования сайтов[/]");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[bold]Использование:[/]");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[yellow]1. Режим аргументов командной строки:[/]");
-    AnsiConsole.MarkupLine("   app.exe --urls https://example.com --users 5 --requests 10");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[yellow]2. Режим конфигурационного файла:[/]");
-    AnsiConsole.MarkupLine("   app.exe --config config.json");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[yellow]3. Интерактивный режим:[/]");
-    AnsiConsole.MarkupLine("   app.exe");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[bold]Параметры:[/]");
-    AnsiConsole.MarkupLine("  --urls, -u          URL-адреса для тестирования (можно несколько)");
-    AnsiConsole.MarkupLine("  --mode, -m          Режим работы: sequential или random");
-    AnsiConsole.MarkupLine("  --users, -v         Количество виртуальных пользователей");
-    AnsiConsole.MarkupLine("  --requests, -r      Количество запросов на пользователя");
-    AnsiConsole.MarkupLine("  --delay, -d         Задержка между запросами (мс)");
-    AnsiConsole.MarkupLine("  --scenarios         Сценарии в формате 'users:requests:duration,users:requests:duration'");
-    AnsiConsole.MarkupLine("  --header, -H        Заголовки в формате 'Name:Value'");
-    AnsiConsole.MarkupLine("  --config, -c        Путь к файлу конфигурации (JSON)");
-    AnsiConsole.MarkupLine("  --save, -s          Путь для сохранения результатов (CSV)");
-    AnsiConsole.MarkupLine("  --load, -l          Пути к файлам результатов для анализа");
-    AnsiConsole.MarkupLine("  help                Показать эту справку");
-});
-
-// Helper методы
-static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict)
-{
-    foreach (var header in headers)
-    {
-        var parts = header.Split(':', 2);
-        if (parts.Length == 2)
-        {
-            targetDict[parts[0].Trim()] = parts[1].Trim();
+                        token).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         }
-    }
-}
-
-static string ResolveOutputPath(string? savePath)
-{
-    if (!string.IsNullOrWhiteSpace(savePath))
-    {
-        return Path.GetFullPath(savePath);
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-    return Path.Combine(Path.GetTempPath(), $"ConsoleLoadTesting_{timestamp}.csv");
-}
-
-static bool ValidateConfig(TestConfig config)
-{
-    if (config.UseScenarios)
-    {
-        if (config.Scenarios.Count == 0)
+        finally
         {
-            AnsiConsole.MarkupLine("[red]Ошибка: Не указаны сценарии для тестирования[/]");
-            return false;
+            await resultWriter.CompleteAsync().ConfigureAwait(false);
+            loadTestService.Dispose();
         }
 
-        foreach (var scenario in config.Scenarios)
-        {
-            if (scenario.VirtualUsers < 1)
-            {
-                AnsiConsole.MarkupLine($"[red]Ошибка: Количество виртуальных пользователей в сценарии должно быть больше 0[/]");
-                return false;
-            }
-
-            if (scenario.RequestCount < 1)
-            {
-                AnsiConsole.MarkupLine($"[red]Ошибка: Количество запросов в сценарии должно быть больше 0[/]");
-                return false;
-            }
-
-            if (scenario.DurationSeconds < 1)
-            {
-                AnsiConsole.MarkupLine($"[red]Ошибка: Длительность сценария должна быть больше 0 секунд[/]");
-                return false;
-            }
-        }
+        AnsiConsole.WriteLine();
+        resultServiceForTest.DisplayResultsFromFile(outputPath, config.ChartTimeStepSeconds);
     }
-    else
+
+    private static TestConfig BuildConfig(CommandContext context, ConfigService configService)
     {
+        TestConfig config;
+
+        if (!string.IsNullOrWhiteSpace(context.ConfigPath))
+        {
+            config = configService.LoadFromFile(context.ConfigPath);
+        }
+        else if (context.Urls.Length > 0)
+        {
+            config = new TestConfig
+            {
+                Urls = context.Urls.ToList(),
+                UrlMode = context.UrlMode.Equals("random", StringComparison.OrdinalIgnoreCase)
+                    ? UrlMode.Random
+                    : UrlMode.Sequential,
+                VirtualUsers = context.Users,
+                RequestCount = context.Requests,
+                DelayMs = context.Delay,
+                ChartTimeStepSeconds = context.ChartTimeStepSeconds
+            };
+
+            ParseHeaders(context.Headers, config.Headers);
+        }
+        else
+        {
+            throw new ArgumentException("No input provided. Use --help for usage.");
+        }
+
+        ValidateConfigOrThrow(config);
+        return config;
+    }
+
+    private static void ValidateConfigOrThrow(TestConfig config)
+    {
+        if (config.Urls.Count == 0)
+        {
+            throw new ArgumentException("No URLs provided for testing");
+        }
+
         if (config.VirtualUsers < 1)
         {
-            AnsiConsole.MarkupLine("[red]Ошибка: Количество виртуальных пользователей должно быть больше 0[/]");
-            return false;
+            throw new ArgumentException("Virtual users must be greater than 0");
         }
 
         if (config.RequestCount < 1)
         {
-            AnsiConsole.MarkupLine("[red]Ошибка: Количество запросов должно быть больше 0[/]");
-            return false;
+            throw new ArgumentException("Request count must be greater than 0");
         }
     }
 
-    return true;
-}
+    private static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict)
+    {
+        foreach (var header in headers)
+        {
+            var parts = header.Split(':', 2);
+            if (parts.Length == 2)
+            {
+                targetDict[parts[0].Trim()] = parts[1].Trim();
+            }
+        }
+    }
 
-return await rootCommand.InvokeAsync(args);
+    private static void SetCulture()
+    {
+        CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+        CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
+    }
+
+    private sealed class CommandContext
+    {
+        public string[] Urls { get; init; } = Array.Empty<string>();
+        public string UrlMode { get; init; } = "sequential";
+        public int Users { get; init; } = 1;
+        public int Requests { get; init; } = 1;
+        public int Delay { get; init; }
+        public string[] Headers { get; init; } = Array.Empty<string>();
+        public string ConfigPath { get; init; } = string.Empty;
+        public string SavePath { get; init; } = string.Empty;
+        public string[] LoadPaths { get; init; } = Array.Empty<string>();
+        public int ChartTimeStepSeconds { get; init; } = 1;
+    }
+}

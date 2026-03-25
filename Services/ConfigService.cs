@@ -1,11 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ConsoleLoadTesting.Models;
-using Spectre.Console;
 
 namespace ConsoleLoadTesting.Services;
 
-// Кастомный конвертер для enum, который не чувствителен к регистру
+// Case-insensitive enum converter
 public class CaseInsensitiveEnumConverter<T> : JsonConverter<T> where T : struct, Enum
 {
     public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -17,7 +16,7 @@ public class CaseInsensitiveEnumConverter<T> : JsonConverter<T> where T : struct
         if (Enum.TryParse<T>(value, ignoreCase: true, out var result))
             return result;
 
-        throw new JsonException($"Неизвестное значение enum: {value}");
+        throw new JsonException($"Unknown enum value: {value}");
     }
 
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
@@ -28,50 +27,29 @@ public class CaseInsensitiveEnumConverter<T> : JsonConverter<T> where T : struct
 
 public class ConfigService
 {
-    public TestConfig? LoadFromFile(string filePath)
+    public TestConfig LoadFromFile(string filePath)
     {
         if (!File.Exists(filePath))
         {
-            AnsiConsole.MarkupLine($"[red]Ошибка: Файл конфигурации не найден: {filePath}[/]");
-            return null;
+            throw new FileNotFoundException($"Config file not found: {filePath}", filePath);
         }
 
-        try
+        var json = File.ReadAllText(filePath);
+        var options = new JsonSerializerOptions
         {
-            var json = File.ReadAllText(filePath);
-            var options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                Converters = { new CaseInsensitiveEnumConverter<UrlMode>() }
-            };
-            
-            var config = JsonSerializer.Deserialize<TestConfig>(json, options);
-            
-            if (config == null)
-            {
-                AnsiConsole.MarkupLine("[red]Ошибка: Не удалось десериализовать конфигурацию из файла[/]");
-                return null;
-            }
+            PropertyNameCaseInsensitive = true,
+            Converters = { new CaseInsensitiveEnumConverter<UrlMode>() }
+        };
 
-            // Валидация конфигурации
-            if (config.Urls == null || config.Urls.Count == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Ошибка: В конфигурации не указаны URL-адреса[/]");
-                return null;
-            }
+        var config = JsonSerializer.Deserialize<TestConfig>(json, options)
+            ?? throw new InvalidDataException("Failed to deserialize configuration");
 
-            return config;
-        }
-        catch (JsonException ex)
+        if (config.Urls == null || config.Urls.Count == 0)
         {
-            AnsiConsole.MarkupLine($"[red]Ошибка парсинга JSON: {ex.Message}[/]");
-            return null;
+            throw new InvalidDataException("No URLs provided in configuration");
         }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Ошибка при загрузке конфигурации: {ex.Message}[/]");
-            return null;
-        }
+
+        return config;
     }
 
     public void SaveToFile(TestConfig config, string filePath)
@@ -84,13 +62,9 @@ public class ConfigService
         };
         var json = JsonSerializer.Serialize(config, options);
         
-        // Создаём директорию, если её нет
-        var directory = Path.GetDirectoryName(filePath);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-        
+        // Create directory if needed
+        FileService.EnsureOutputDirectory(filePath);
+
         File.WriteAllText(filePath, json);
     }
 }
