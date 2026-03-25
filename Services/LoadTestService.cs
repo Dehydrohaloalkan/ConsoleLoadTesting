@@ -18,45 +18,53 @@ public class LoadTestService
         TestConfig config,
         IProgress<double>? progress = null,
         Action<TestResult>? onResultReceived = null,
+        ResultWriter? resultWriter = null,
         CancellationToken cancellationToken = default)
     {
         var results = new List<TestResult>();
         var totalRequests = config.RequestCount * config.VirtualUsers;
         var completedRequests = 0;
-        var random = new Random();
-
         var tasks = new List<Task>();
 
         for (int userId = 0; userId < config.VirtualUsers; userId++)
         {
+            var localUserId = userId;
             var userTasks = Task.Run(async () =>
             {
-                var userResults = new List<TestResult>();
+                var bufferCapacity = GetBufferCapacity(config.RequestCount);
+                var userBuffer = new List<TestResult>(bufferCapacity);
 
-                for (int i = 0; i < config.RequestCount; i++)
+                try
                 {
-                    if (cancellationToken.IsCancellationRequested)
-                        break;
-
-                    var url = config.UrlMode == UrlMode.Random
-                        ? config.Urls[random.Next(config.Urls.Count)]
-                        : config.Urls[i % config.Urls.Count];
-
-                    var result = await ExecuteRequestAsync(userId, url, config.Headers);
-                    userResults.Add(result);
-                    onResultReceived?.Invoke(result);
-
-                    progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
-
-                    if (config.DelayMs > 0 && i < config.RequestCount - 1)
+                    for (int i = 0; i < config.RequestCount; i++)
                     {
-                        await Task.Delay(config.DelayMs, cancellationToken);
+                        if (cancellationToken.IsCancellationRequested)
+                            break;
+
+                        var url = config.UrlMode == UrlMode.Random
+                            ? config.Urls[Random.Shared.Next(config.Urls.Count)]
+                            : config.Urls[i % config.Urls.Count];
+
+                        var result = await ExecuteRequestAsync(localUserId, url, config.Headers);
+                        userBuffer.Add(result);
+                        onResultReceived?.Invoke(result);
+
+                        progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
+
+                        if (userBuffer.Count >= bufferCapacity)
+                        {
+                            await FlushBufferAsync(userBuffer, results, resultWriter).ConfigureAwait(false);
+                        }
+
+                        if (config.DelayMs > 0 && i < config.RequestCount - 1)
+                        {
+                            await Task.Delay(config.DelayMs, cancellationToken);
+                        }
                     }
                 }
-
-                lock (results)
+                finally
                 {
-                    results.AddRange(userResults);
+                    await FlushBufferAsync(userBuffer, results, resultWriter).ConfigureAwait(false);
                 }
             }, cancellationToken);
 
@@ -71,6 +79,7 @@ public class LoadTestService
         TestConfig config,
         IProgress<double>? progress = null,
         Action<TestResult>? onResultReceived = null,
+        ResultWriter? resultWriter = null,
         CancellationToken cancellationToken = default)
     {
         if (!config.UseScenarios || config.Scenarios.Count == 0)
@@ -82,7 +91,6 @@ public class LoadTestService
         var avgResponseTime = await CalibrateResponseTimeAsync(config, cancellationToken);
 
         var allResults = new List<TestResult>();
-        var random = new Random();
         var scenarioIndex = 0;
 
         foreach (var scenario in config.Scenarios)
@@ -90,8 +98,19 @@ public class LoadTestService
             scenarioIndex++;
             AnsiConsole.MarkupLine($"[bold cyan]Запуск сценария {scenarioIndex}/{config.Scenarios.Count}: {scenario.VirtualUsers} пользователей, {scenario.RequestCount} запросов, {scenario.DurationSeconds} секунд[/]");
 
-            var scenarioResults = await RunScenarioAsync(scenario, config, avgResponseTime, random, progress, onResultReceived, cancellationToken);
-            allResults.AddRange(scenarioResults);
+            var scenarioResults = await RunScenarioAsync(
+                scenario,
+                config,
+                avgResponseTime,
+                progress,
+                onResultReceived,
+                resultWriter,
+                cancellationToken);
+
+            if (resultWriter is null)
+            {
+                allResults.AddRange(scenarioResults);
+            }
 
             AnsiConsole.MarkupLine($"[green]Сценарий {scenarioIndex} завершен[/]");
             AnsiConsole.WriteLine();
@@ -104,9 +123,9 @@ public class LoadTestService
         ScenarioConfig scenario,
         TestConfig config,
         long avgResponseTime,
-        Random random,
         IProgress<double>? progress,
         Action<TestResult>? onResultReceived,
+        ResultWriter? resultWriter,
         CancellationToken cancellationToken)
     {
         var results = new List<TestResult>();
@@ -126,36 +145,43 @@ public class LoadTestService
 
         for (int userId = 0; userId < scenario.VirtualUsers; userId++)
         {
+            var localUserId = userId;
             var userTasks = Task.Run(async () =>
             {
-                var userResults = new List<TestResult>();
-                var userStartTime = DateTime.UtcNow;
+                var bufferCapacity = GetBufferCapacity(scenario.RequestCount);
+                var userBuffer = new List<TestResult>(bufferCapacity);
 
-                for (int requestIndex = 0; requestIndex < scenario.RequestCount; requestIndex++)
+                try
                 {
-                    if (cancellationToken.IsCancellationRequested || DateTime.UtcNow >= scenarioEndTime)
-                        break;
-
-                    var url = config.UrlMode == UrlMode.Random
-                        ? config.Urls[random.Next(config.Urls.Count)]
-                        : config.Urls[requestIndex % config.Urls.Count];
-
-                    var result = await ExecuteRequestAsync(userId, url, config.Headers);
-                    userResults.Add(result);
-                    onResultReceived?.Invoke(result);
-
-                    progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
-
-                    // Задержка между запросами
-                    if (delayBetweenRequests > 0 && requestIndex < scenario.RequestCount - 1)
+                    for (int requestIndex = 0; requestIndex < scenario.RequestCount; requestIndex++)
                     {
-                        await Task.Delay((int)delayBetweenRequests, cancellationToken);
+                        if (cancellationToken.IsCancellationRequested || DateTime.UtcNow >= scenarioEndTime)
+                            break;
+
+                        var url = config.UrlMode == UrlMode.Random
+                            ? config.Urls[Random.Shared.Next(config.Urls.Count)]
+                            : config.Urls[requestIndex % config.Urls.Count];
+
+                        var result = await ExecuteRequestAsync(localUserId, url, config.Headers);
+                        userBuffer.Add(result);
+                        onResultReceived?.Invoke(result);
+
+                        progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
+
+                        if (userBuffer.Count >= bufferCapacity)
+                        {
+                            await FlushBufferAsync(userBuffer, results, resultWriter).ConfigureAwait(false);
+                        }
+
+                        if (delayBetweenRequests > 0 && requestIndex < scenario.RequestCount - 1)
+                        {
+                            await Task.Delay((int)delayBetweenRequests, cancellationToken);
+                        }
                     }
                 }
-
-                lock (results)
+                finally
                 {
-                    results.AddRange(userResults);
+                    await FlushBufferAsync(userBuffer, results, resultWriter).ConfigureAwait(false);
                 }
             }, cancellationToken);
 
@@ -163,9 +189,6 @@ public class LoadTestService
         }
 
         await Task.WhenAll(tasks);
-
-        // Фильтруем результаты, оставляя только те, которые были выполнены в рамках сценария
-        results = results.Where(r => r.Timestamp >= scenarioStartTime && r.Timestamp <= scenarioEndTime).ToList();
 
         return results;
     }
@@ -219,7 +242,6 @@ public class LoadTestService
     public async Task<long> CalibrateResponseTimeAsync(TestConfig config, CancellationToken cancellationToken = default)
     {
         var calibrationResults = new List<long>();
-        var random = new Random();
 
         AnsiConsole.MarkupLine($"[yellow]Выполняем калибровку ({config.CalibrationRequests} тестовых запросов)...[/]");
 
@@ -228,7 +250,7 @@ public class LoadTestService
             if (cancellationToken.IsCancellationRequested)
                 break;
 
-            var url = config.Urls[random.Next(config.Urls.Count)];
+            var url = config.Urls[Random.Shared.Next(config.Urls.Count)];
             var result = await ExecuteRequestAsync(-1, url, config.Headers);
 
             if (result.IsSuccess)
@@ -262,5 +284,35 @@ public class LoadTestService
     public void Dispose()
     {
         _httpClient?.Dispose();
+    }
+
+    private static int GetBufferCapacity(int requestCount)
+    {
+        return Math.Max(1, Math.Min(100, requestCount));
+    }
+
+    private static async Task FlushBufferAsync(
+        List<TestResult> userBuffer,
+        List<TestResult> fallbackResults,
+        ResultWriter? resultWriter)
+    {
+        if (userBuffer.Count == 0)
+        {
+            return;
+        }
+
+        if (resultWriter is not null)
+        {
+            await resultWriter.EnqueueAsync(userBuffer.ToArray()).ConfigureAwait(false);
+        }
+        else
+        {
+            lock (fallbackResults)
+            {
+                fallbackResults.AddRange(userBuffer);
+            }
+        }
+
+        userBuffer.Clear();
     }
 }

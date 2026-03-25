@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using Spectre.Console;
 using ConsoleLoadTesting.Models;
 using ConsoleLoadTesting.Services;
@@ -98,26 +98,7 @@ rootCommand.SetHandler(async (context) =>
     // Режим загрузки и анализа файлов
     if (loadPaths.Length > 0)
     {
-        var testResultsDict = new Dictionary<string, List<TestResult>>();
-        
-        foreach (var loadPath in loadPaths)
-        {
-            var loadedResults = resultService.LoadResultsFromFile(loadPath);
-            if (loadedResults != null && loadedResults.Any())
-            {
-                testResultsDict[loadPath] = loadedResults;
-            }
-        }
-
-        if (testResultsDict.Count > 0)
-        {
-            resultService.DisplaySummaryReport(testResultsDict, 1); // Используем шаг по умолчанию
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Не удалось загрузить ни одного файла[/]");
-            context.ExitCode = 1;
-        }
+        resultService.DisplaySummaryReport(loadPaths, 1);
         return;
     }
 
@@ -195,50 +176,59 @@ rootCommand.SetHandler(async (context) =>
     AnsiConsole.MarkupLine("[bold green]Запуск нагрузочного тестирования...[/]");
     AnsiConsole.WriteLine();
 
-    List<TestResult> results = new();
-    var resultsLock = new object();
+    var outputPath = ResolveOutputPath(savePath);
+    var realtimeStats = new RealtimeStats();
+    var statsLock = new object();
     var startTime = DateTime.UtcNow;
 
-    // Всегда показываем статистику в реальном времени
-    await AnsiConsole.Live(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime))
-        .StartAsync(async ctx =>
-        {
-            var onResultReceived = new Action<TestResult>(result =>
+    AnsiConsole.MarkupLine($"[grey]Файл результатов: {outputPath}[/]");
+
+    await using var resultWriter = new ResultWriter(outputPath);
+
+    try
+    {
+        await AnsiConsole.Live(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime))
+            .StartAsync(async ctx =>
             {
-                lock (resultsLock)
+                var onResultReceived = new Action<TestResult>(result =>
                 {
-                    results.Add(result);
+                    lock (statsLock)
+                    {
+                        realtimeStats.Add(result);
+                        ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(realtimeStats, config.Urls, startTime));
+                    }
+                });
+
+                if (config.UseScenarios)
+                {
+                    await loadTestService.RunScenariosLoadTestAsync(
+                        config,
+                        null,
+                        onResultReceived,
+                        resultWriter,
+                        CancellationToken.None);
                 }
-                ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime));
+                else
+                {
+                    await loadTestService.RunLoadTestAsync(
+                        config,
+                        null,
+                        onResultReceived,
+                        resultWriter,
+                        CancellationToken.None);
+                }
             });
-
-            var returnedResults = config.UseScenarios
-                ? await loadTestService.RunScenariosLoadTestAsync(config, null, onResultReceived, CancellationToken.None)
-                : await loadTestService.RunLoadTestAsync(config, null, onResultReceived, CancellationToken.None);
-
-            lock (resultsLock)
-            {
-                if (returnedResults.Count > results.Count)
-                {
-                    results.Clear();
-                    results.AddRange(returnedResults);
-                }
-                ctx.UpdateTarget(resultServiceForTest.CreateUrlStatsTable(results, config.Urls, startTime));
-            }
-        });
+    }
+    finally
+    {
+        await resultWriter.CompleteAsync();
+        loadTestService.Dispose();
+    }
 
     AnsiConsole.WriteLine();
 
     // Вывод результатов
-    resultServiceForTest.DisplayResults(results, config.ChartTimeStepSeconds);
-
-    // Сохранение результатов
-    if (!string.IsNullOrEmpty(savePath))
-    {
-        resultServiceForTest.SaveResultsToFile(results, savePath);
-    }
-
-    loadTestService.Dispose();
+    resultServiceForTest.DisplayResultsFromFile(outputPath, config.ChartTimeStepSeconds);
 });
 
 // Обработка команды help
@@ -285,6 +275,17 @@ static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict
             targetDict[parts[0].Trim()] = parts[1].Trim();
         }
     }
+}
+
+static string ResolveOutputPath(string? savePath)
+{
+    if (!string.IsNullOrWhiteSpace(savePath))
+    {
+        return Path.GetFullPath(savePath);
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+    return Path.Combine(Path.GetTempPath(), $"ConsoleLoadTesting_{timestamp}.csv");
 }
 
 static bool ValidateConfig(TestConfig config)
