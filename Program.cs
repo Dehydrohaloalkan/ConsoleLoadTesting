@@ -35,6 +35,11 @@ public sealed class Program
         description: "Delay between requests in milliseconds",
         getDefaultValue: () => 0);
 
+    private static readonly Option<int> _maxInFlightPerUserOption = new(
+        aliases: new[] { "--inflight-per-user", "--max-inflight-per-user" },
+        description: "Max in-flight requests per virtual user (1 = sequential per user)",
+        getDefaultValue: () => 1);
+
     private static readonly Option<string[]> _headersOption = new(
         aliases: new[] { "--header", "-H" },
         description: "Request headers in 'Name:Value' format (you can provide multiple)")
@@ -92,6 +97,7 @@ public sealed class Program
         _rootCommand.AddOption(_usersOption);
         _rootCommand.AddOption(_requestsOption);
         _rootCommand.AddOption(_delayOption);
+        _rootCommand.AddOption(_maxInFlightPerUserOption);
         _rootCommand.AddOption(_headersOption);
         _rootCommand.AddOption(_configOption);
         _rootCommand.AddOption(_saveOption);
@@ -108,6 +114,7 @@ public sealed class Program
                 Users = parseResult.GetValueForOption(_usersOption),
                 Requests = parseResult.GetValueForOption(_requestsOption),
                 Delay = parseResult.GetValueForOption(_delayOption),
+                MaxInFlightPerUser = parseResult.GetValueForOption(_maxInFlightPerUserOption),
                 Headers = parseResult.GetValueForOption(_headersOption) ?? Array.Empty<string>(),
                 ConfigPath = parseResult.GetValueForOption(_configOption) ?? string.Empty,
                 SavePath = parseResult.GetValueForOption(_saveOption) ?? string.Empty,
@@ -202,6 +209,7 @@ public sealed class Program
                 VirtualUsers = context.Users,
                 RequestCount = context.Requests,
                 DelayMs = context.Delay,
+                MaxInFlightPerUser = context.MaxInFlightPerUser,
                 ChartTimeStepSeconds = context.ChartTimeStepSeconds
             };
 
@@ -232,6 +240,11 @@ public sealed class Program
         {
             throw new ArgumentException("Request count must be greater than 0");
         }
+
+        if (config.MaxInFlightPerUser < 1)
+        {
+            throw new ArgumentException("MaxInFlightPerUser must be greater than 0");
+        }
     }
 
     private static void ParseHeaders(string[] headers, Dictionary<string, string> targetDict)
@@ -259,6 +272,7 @@ public sealed class Program
         public int Users { get; init; } = 1;
         public int Requests { get; init; } = 1;
         public int Delay { get; init; }
+        public int MaxInFlightPerUser { get; init; } = 1;
         public string[] Headers { get; init; } = Array.Empty<string>();
         public string ConfigPath { get; init; } = string.Empty;
         public string SavePath { get; init; } = string.Empty;

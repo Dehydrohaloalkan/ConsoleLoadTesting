@@ -22,7 +22,7 @@ public class LoadTestService
     {
         var results = new List<TestResult>();
         var totalRequests = config.RequestCount * config.VirtualUsers;
-        var completedRequests = 0;
+        var completedRequests = new Counter();
         var tasks = new List<Task>();
 
         for (int userId = 0; userId < config.VirtualUsers; userId++)
@@ -30,8 +30,12 @@ public class LoadTestService
             var localUserId = userId;
             var userTasks = Task.Run(async () =>
             {
+                var maxInFlight = NormalizeMaxInFlightPerUser(config.MaxInFlightPerUser);
+                using var inFlightGate = new SemaphoreSlim(maxInFlight, maxInFlight);
                 var bufferCapacity = GetBufferCapacity(config.RequestCount);
                 var userBuffer = new List<TestResult>(bufferCapacity);
+                var bufferLock = new object();
+                var inFlightTasks = new List<Task>(Math.Min(config.RequestCount, maxInFlight));
 
                 try
                 {
@@ -44,22 +48,33 @@ public class LoadTestService
                             ? config.Urls[Random.Shared.Next(config.Urls.Count)]
                             : config.Urls[i % config.Urls.Count];
 
-                        var result = await ExecuteRequestAsync(localUserId, url, config.Headers);
-                        userBuffer.Add(result);
-                        onResultReceived?.Invoke(result);
+                        await inFlightGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                        progress?.Report((double)Interlocked.Increment(ref completedRequests) / totalRequests);
+                        var requestTask = ProcessSingleRequestAsync(
+                            localUserId,
+                            url,
+                            config.Headers,
+                            onResultReceived,
+                            progress,
+                            totalRequests,
+                            completedRequests,
+                            userBuffer,
+                            bufferCapacity,
+                            bufferLock,
+                            results,
+                            resultWriter,
+                            inFlightGate,
+                            cancellationToken);
 
-                        if (userBuffer.Count >= bufferCapacity)
-                        {
-                            await FlushBufferAsync(userBuffer, results, resultWriter).ConfigureAwait(false);
-                        }
+                        inFlightTasks.Add(requestTask);
 
                         if (config.DelayMs > 0 && i < config.RequestCount - 1)
                         {
                             await Task.Delay(config.DelayMs, cancellationToken);
                         }
                     }
+
+                    await Task.WhenAll(inFlightTasks).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -74,7 +89,11 @@ public class LoadTestService
         return results;
     }
 
-    private async Task<TestResult> ExecuteRequestAsync(int userId, string url, Dictionary<string, string> headers)
+    private async Task<TestResult> ExecuteRequestAsync(
+        int userId,
+        string url,
+        Dictionary<string, string> headers,
+        CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         var requestStartTime = DateTime.UtcNow;
@@ -101,7 +120,7 @@ public class LoadTestService
                 }
             }
 
-            var response = await _httpClient.SendAsync(request);
+            var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             stopwatch.Stop();
 
             result.StatusCode = (int)response.StatusCode;
@@ -130,6 +149,67 @@ public class LoadTestService
         return Math.Max(1, Math.Min(100, requestCount));
     }
 
+    private static int NormalizeMaxInFlightPerUser(int maxInFlightPerUser)
+    {
+        return Math.Max(1, maxInFlightPerUser);
+    }
+
+    private async Task ProcessSingleRequestAsync(
+        int userId,
+        string url,
+        Dictionary<string, string> headers,
+        Action<TestResult>? onResultReceived,
+        IProgress<double>? progress,
+        int totalRequests,
+        Counter completedRequests,
+        List<TestResult> userBuffer,
+        int bufferCapacity,
+        object bufferLock,
+        List<TestResult> results,
+        ResultWriter? resultWriter,
+        SemaphoreSlim inFlightGate,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ExecuteRequestAsync(userId, url, headers, cancellationToken).ConfigureAwait(false);
+            TestResult[]? batchToFlush = null;
+
+            lock (bufferLock)
+            {
+                userBuffer.Add(result);
+
+                if (userBuffer.Count >= bufferCapacity)
+                {
+                    batchToFlush = userBuffer.ToArray();
+                    userBuffer.Clear();
+                }
+            }
+
+            onResultReceived?.Invoke(result);
+            progress?.Report((double)Interlocked.Increment(ref completedRequests.Value) / totalRequests);
+
+            if (batchToFlush is not null)
+            {
+                if (resultWriter is not null)
+                {
+                    await resultWriter.EnqueueAsync(batchToFlush, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    lock (results)
+                    {
+                        results.AddRange(batchToFlush);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            inFlightGate.Release();
+        }
+    }
+
     private static async Task FlushBufferAsync(
         List<TestResult> userBuffer,
         List<TestResult> fallbackResults,
@@ -153,5 +233,10 @@ public class LoadTestService
         }
 
         userBuffer.Clear();
+    }
+
+    private sealed class Counter
+    {
+        public int Value;
     }
 }

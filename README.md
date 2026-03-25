@@ -58,10 +58,12 @@ app.exe --load results1.csv results2.csv
 | `--users` | `-v` | Количество виртуальных пользователей (по умолчанию: 1) |
 | `--requests` | `-r` | Количество запросов на пользователя (по умолчанию: 1) |
 | `--delay` | `-d` | Задержка между запросами в миллисекундах (по умолчанию: 0) |
+| `--inflight-per-user` |  | Максимум “in-flight” запросов на пользователя (1 = строго последовательно) |
 | `--header` | `-H` | Заголовки запроса в формате 'Name:Value' (можно несколько) |
 | `--config` | `-c` | Путь к файлу конфигурации (JSON) |
 | `--save` | `-s` | Путь для сохранения результатов в CSV файл. Если не указан, создается temp-файл с датой в имени |
 | `--load` | `-l` | Пути к файлам результатов для анализа (можно несколько) |
+| `--chart-step` |  | Шаг времени для графиков (в секундах). Алиасы: `--chart-time-step-seconds`, `--chartTimeStepSeconds` |
 
 ## Конфигурационный файл
 
@@ -114,7 +116,7 @@ app.exe --load results1.csv results2.csv
 app.exe --urls https://example.com --users 10 --requests 50 --save results.csv
 
 # Анализ сохраненных результатов
-app.exe --load results1.csv results2.csv results3.csv
+app.exe --load results1.csv results2.csv results3.csv --chart-step 5
 ```
 
 Если `--save` не указан, приложение автоматически создаст временный CSV-файл вида `ConsoleLoadTesting_yyyyMMdd_HHmmss.csv` в системной temp-директории и использует его как основной файл результата.

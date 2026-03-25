@@ -4,6 +4,7 @@
     "VirtualUsers": 80,
     "RequestCount": 100,
     "DelayMs": 0,
+    "MaxInFlightPerUser": 1,
     "ChartTimeStepSeconds": 1,
     "Headers": {
         "User-Agent": "LoadTest/1.0",
